@@ -20,4 +20,4 @@
 
 ## Проверка
 
-Из корня: `python -m pip install -r backend/requirements.txt`, `python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000`, `python -m unittest discover -s tests -v`. Для интерфейса: `cd frontend`, `npm ci`, `npm run dev`, `npm run build`. После интеграции конструктора установите также `backend/requirements-dev.txt` для его тестов. На Windows команда `py -3` может быть недоступна – используйте установленный `python` или интерпретатор виртуального окружения.
+Из корня: `python -m pip install -r backend/requirements.txt`, `python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000`, `python -m pip install -r backend/requirements-dev.txt`, `python -m unittest discover -s tests -v`. Для интерфейса: `cd frontend`, `npm ci`, `npm run dev`, `npm run build`. На Windows команда `py -3` может быть недоступна – используйте установленный `python` или интерпретатор виртуального окружения.
