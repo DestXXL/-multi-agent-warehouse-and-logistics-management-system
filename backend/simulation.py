@@ -14,6 +14,7 @@ class WarehouseSimulation:
         self.manager_agent = ManagerAgent()
         self.robot_agent = RobotAgent()
         self.zone_agent = ZoneAgent()
+        self.custom_layout = None
         self.reset()
 
     def reset(self) -> None:
@@ -36,6 +37,8 @@ class WarehouseSimulation:
                 StockItem(id="SKU-003", name="Коробка C-22", position=(8, 1), size="large"),
             ],
         )
+        if self.custom_layout is not None:
+            self.warehouse = self.custom_layout.warehouse()
         self.running = False
         self.zone_agent.clear()
         self.tick_count = 0

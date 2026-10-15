@@ -389,4 +389,5 @@ function DriverTablet({ robot, robots, order, width, cells, running, busy, onlin
   </section>
 }
 
-export default App
+function WithLayoutLink() { return <><a style={{position:'fixed',bottom:12,right:18,zIndex:100,background:'#225dcb',color:'white',padding:'10px 16px',borderRadius:8}} href='?view=layout'>Конструктор склада ↗</a><App /></> }
+export default WithLayoutLink
