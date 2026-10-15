@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from backend.simulation import WarehouseSimulation
+from backend.layout import Layout, from_warehouse
 
 
 simulation = WarehouseSimulation()
@@ -176,3 +177,26 @@ async def state_socket(websocket: WebSocket) -> None:
             await websocket.receive_text()
     except WebSocketDisconnect:
         connections.discard(websocket)
+
+
+# Layout edits are atomic and only allowed before any simulation tasks execute.
+@app.get("/api/layout")
+async def get_layout() -> dict:
+    return (simulation.custom_layout or from_warehouse(simulation.warehouse)).model_dump()
+
+@app.post("/api/layout/validate")
+async def validate_layout(layout: Layout) -> dict:
+    errors = layout.errors()
+    return {"valid": not errors, "errors": errors}
+
+@app.put("/api/layout")
+async def apply_layout(layout: Layout) -> dict:
+    errors = layout.errors()
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+    if simulation.running or simulation.tick_count or any(o.status != "pending" for o in simulation.warehouse.orders):
+        raise HTTPException(status_code=409, detail="Сначала завершите работу и сбросьте симуляцию. Пауза не разрешает изменение макета.")
+    simulation.custom_layout = layout.model_copy(deep=True)
+    simulation.reset()
+    simulation._event("Применён макет конструктора. Добавьте заказы для точек забора и отгрузки.", "operator")
+    return await publish_state()
