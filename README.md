@@ -42,4 +42,3 @@ npm --prefix frontend run dev
 * [DEVELOPMENT.md](DEVELOPMENT.md) – установка, тестирование и диагностика.
 * [DEMO-LAYOUT.md](DEMO-LAYOUT.md) – контракт JSON и сценарий конструктора.
 * [docs/project-status.md](docs/project-status.md) – реализованное, дефекты и планы.
-* [docs/participant-2-handoff.md](docs/participant-2-handoff.md) – передача задачи участнику №2.
