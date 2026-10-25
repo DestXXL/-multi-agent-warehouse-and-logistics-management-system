@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react'
 import './layout.css'
+import { meterInputValue, millimetersFromMeters } from './units'
 type Kind = 'rack' | 'wall' | 'pickup' | 'shipping' | 'robot'
-type Cell = { x: number; y: number; kind: Kind; levels: number }
+type RackType = { key: string; title: string; purpose: string; width_mm: number; depth_mm: number; height_mm: number; levels: number; positions_per_level: number }
+type Cell = { x: number; y: number; kind: Kind; levels: number; id?: string; rack_type?: string; width_mm?: number; depth_mm?: number; height_mm?: number; positions_per_level?: number }
 type Layout = { version: 1; width: number; height: number; cells: Cell[] }
 const labels: Record<Kind, string> = { rack: 'Стеллаж', wall: 'Стена', pickup: 'Забор', shipping: 'Отгрузка', robot: 'Стоянка' }
 const api = `http://${window.location.hostname}:8000`
 export default function LayoutEditor() {
   const [layout, setLayout] = useState<Layout | null>(null)
   const [tool, setTool] = useState<Kind | 'erase'>('rack')
-  const [levels, setLevels] = useState(3)
+  const [rackType, setRackType] = useState('pallet_high')
+  const [rackTypes, setRackTypes] = useState<Record<string, RackType>>({})
+  const [selectedRack, setSelectedRack] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   async function request(path: string, method = 'GET', body?: unknown) {
@@ -17,7 +21,7 @@ export default function LayoutEditor() {
     if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Некорректный формат макета. Проверьте размеры, типы объектов и ярусы.')
     return data
   }
-  useEffect(() => { request('/api/layout').then(setLayout).catch(e => setMessage(String(e))) }, [])
+  useEffect(() => { Promise.all([request('/api/layout'), request('/api/rack-types')]).then(([nextLayout, types]) => { setLayout(nextLayout); setRackTypes(types) }).catch(e => setMessage(String(e))) }, [])
   async function run(action: () => Promise<void>) {
     setBusy(true)
     try { await action() } catch (e) { setMessage(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
@@ -33,7 +37,13 @@ export default function LayoutEditor() {
   }
   if (!layout) return <main className="layout-editor"><a href="?view=control">← Диспетчерская</a><p role="status">{message || 'Загрузка макета…'}</p></main>
   const cells = new Map(layout.cells.map(c => [`${c.x},${c.y}`, c]))
-  const capacity = layout.cells.filter(c => c.kind === 'rack').reduce((s,c) => s+c.levels,0)
+  const selected = selectedRack ? cells.get(selectedRack) : undefined
+  const updateRack = (field: 'id' | 'rack_type' | 'width_mm' | 'depth_mm' | 'height_mm' | 'levels' | 'positions_per_level', value: string | number) => {
+    if (!selected || selected.kind !== 'rack') return
+    setLayout({ ...layout, cells: layout.cells.map(cell => cell === selected ? { ...cell, [field]: value } : cell) })
+    setMessage('Есть изменения. Проверьте и примените макет.')
+  }
+  const capacity = layout.cells.filter(c => c.kind === 'rack').reduce((s,c) => s+c.levels*(c.positions_per_level || 2),0)
   return <main className="layout-editor">
     <header><div><small>WAREHOUSE / ПОДГОТОВКА СРЕДЫ</small><h1>Конструктор склада</h1><p>Разместите объекты кликом. Свободные клетки — проходы; повторный клик обновляет объект.</p></div><a href="?view=control">← Диспетчерская</a></header>
     <div className="layout-columns"><aside>
@@ -41,7 +51,9 @@ export default function LayoutEditor() {
       {(['width', 'height'] as const).map((axis) => <label key={axis}>{axis === 'width' ? 'Ширина' : 'Высота'}<input type="number" min="4" max={axis === 'width' ? 40 : 30} value={layout[axis]} onChange={e => { const n = Number(e.target.value); if (Number.isInteger(n) && n >= 4 && n <= (axis === 'width' ? 40 : 30)) setLayout({ ...layout, [axis]: n }) }} /></label>)}
       <p>При уменьшении объекты за границей сохраняются: удалите их или верните размер. Проверка укажет ошибку.</p>
       <h2>Объекты</h2><div className="layout-tools">{(Object.keys(labels) as Kind[]).map(k => <button className={tool === k ? 'selected' : ''} key={k} onClick={() => setTool(k)}>{labels[k]}</button>)}<button className={tool === 'erase' ? 'selected' : ''} onClick={() => setTool('erase')}>Ластик / проход</button></div>
-      <label>Ярусов в стеллаже<input type="number" min="1" max="12" value={levels} onChange={e => { const n = Number(e.target.value); if (Number.isInteger(n) && n >= 1 && n <= 12) setLevels(n) }} /></label>
+      {tool === 'rack' && <label>Тип нового стеллажа<select value={rackType} onChange={e => setRackType(e.target.value)}>{Object.values(rackTypes).map(type => <option key={type.key} value={type.key}>{type.title}</option>)}</select></label>}
+      {tool === 'rack' && <label>Мест на ярусе<input type="number" min="1" max="100" value={rackTypes[rackType]?.positions_per_level || 2} onChange={e => { const n=Number(e.target.value); if(Number.isInteger(n)&&n>=1&&n<=100) setRackTypes({...rackTypes,[rackType]:{...rackTypes[rackType],positions_per_level:n}}) }} /></label>}
+      {selected?.kind === 'rack' && <div className="rack-fields"><h2>Стеллаж {selected.id || selectedRack}</h2><label>ID<input value={selected.id || ''} onChange={e => updateRack('id', e.target.value)} /></label><label>Тип<select value={selected.rack_type || ''} onChange={e => updateRack('rack_type', e.target.value)}>{Object.values(rackTypes).map(type => <option key={type.key} value={type.key}>{type.title}</option>)}</select></label>{([['width_mm', 'Ширина, м'], ['depth_mm', 'Глубина, м'], ['height_mm', 'Высота, м']] as const).map(([field, label]) => <label key={field}>{label}<input type="number" min="0.001" step="0.001" value={meterInputValue(selected[field] ?? 0)} onChange={e => updateRack(field, millimetersFromMeters(Number(e.target.value)))} /></label>)}<label>Ярусов<input type="number" min="1" max="12" value={selected.levels} onChange={e => updateRack('levels', Number(e.target.value))} /></label><label>Мест на ярусе<input type="number" min="1" max="100" value={selected.positions_per_level || 2} onChange={e => updateRack('positions_per_level', Number(e.target.value))} /></label><p>Смена типа не перезаписывает индивидуальные размеры стеллажа.</p></div>}
       <p>Ярусы описывают места хранения. Движение техники остаётся на уровне пола.</p>
       <button disabled={busy} onClick={() => run(async () => { const r = await request('/api/layout/validate', 'POST', layout); setMessage(r.valid ? 'Макет корректен: объекты доступны через проходы.' : r.errors.join('; ')) })}>Проверить</button>
       <button disabled={busy} onClick={() => run(async () => { await request('/api/layout', 'PUT', layout); setMessage('Макет применён. В диспетчерской добавьте заказ и запустите симуляцию.') })}>Применить к симуляции</button>
@@ -50,7 +62,7 @@ export default function LayoutEditor() {
       <button onClick={() => { const url = URL.createObjectURL(new Blob([JSON.stringify(layout,null,2)], {type:'application/json'})); const a = document.createElement('a'); a.href=url; a.download='warehouse-layout.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000) }}>Скачать JSON</button>
       <label>Загрузить JSON<input disabled={busy} type="file" accept=".json,application/json" onChange={e => { const file=e.target.files?.[0]; if(file) void load(file); e.target.value='' }} /></label>
     </aside><section><div className="layout-summary">{layout.width} × {layout.height} · {layout.cells.filter(c=>c.kind==='rack').length} стеллажей · {capacity} мест по ярусам</div>
-      <div className="layout-grid-scroll"><div className="layout-grid" style={{ gridTemplateColumns: `repeat(${layout.width}, 42px)` }}>{Array.from({length:layout.width*layout.height},(_,i) => { const x=i%layout.width, y=Math.floor(i/layout.width), c=cells.get(`${x},${y}`); return <button key={i} className={`layout-cell ${c?.kind || ''}`} title={`(${x}, ${y}) ${c ? labels[c.kind] : 'Проход'}`} aria-label={`(${x}, ${y}) ${c ? labels[c.kind] : 'Проход'}`} onClick={() => { setLayout({...layout,cells:[...layout.cells.filter(c=>c.x!==x || c.y!==y),...(tool==='erase' ? [] : [{x,y,kind:tool,levels:tool==='rack'?levels:1}])]}); setMessage('Есть изменения. Проверьте и примените макет.') }}>{c ? c.kind==='rack' ? `${c.levels} яр.` : {wall:'■',pickup:'З',shipping:'О',robot:'Р'}[c.kind] : <small>{x},{y}</small>}</button> })}</div></div>
+      <div className="layout-grid-scroll"><div className="layout-grid" style={{ gridTemplateColumns: `repeat(${layout.width}, 42px)` }}>{Array.from({length:layout.width*layout.height},(_,i) => { const x=i%layout.width, y=Math.floor(i/layout.width), c=cells.get(`${x},${y}`); return <button key={i} className={`layout-cell ${c?.kind || ''}`} title={`(${x}, ${y}) ${c ? labels[c.kind] : 'Проход'}`} aria-label={`(${x}, ${y}) ${c ? labels[c.kind] : 'Проход'}`} onClick={() => { if (tool === 'rack' && c?.kind === 'rack') { setSelectedRack(`${x},${y}`); return } const template=rackTypes[rackType]; setLayout({...layout,cells:[...layout.cells.filter(c=>c.x!==x || c.y!==y),...(tool==='erase' ? [] : [{x,y,kind:tool,levels:tool==='rack'?template?.levels || 5:1,...(tool==='rack' ? {id:`A-${String(y+1).padStart(2,'0')}${String(x+1).padStart(2,'0')}`,rack_type:rackType,width_mm:template?.width_mm||2700,depth_mm:template?.depth_mm||1100,height_mm:template?.height_mm||6000,positions_per_level:template?.positions_per_level||2} : {})}])]}); setSelectedRack(tool === 'rack' ? `${x},${y}` : null); setMessage('Есть изменения. Проверьте и примените макет.') }}>{c ? c.kind==='rack' ? `${c.levels} × ${c.positions_per_level || 2}` : {wall:'■',pickup:'З',shipping:'О',robot:'Р'}[c.kind] : <small>{x},{y}</small>}</button> })}</div></div>
       <p role="status" className="layout-message">{message || 'З — забор · О — отгрузка · Р — стоянка. Координаты начинаются с нуля.'}</p>
       <p>Менеджер назначает задания, агент робота строит маршрут, агент зоны учитывает блокировки. Конструктор передаёт геометрию обычному серверному валидатору.</p>
     </section></div>
