@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import LayoutEditor from './LayoutEditor'
 import './style.css'
+import './typography.css'
+import './rack-details.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

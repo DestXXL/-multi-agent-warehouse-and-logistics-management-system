@@ -23,6 +23,8 @@ class DriverWorkflowTests(unittest.TestCase):
     def test_goods_require_confirmation_at_both_ends(self):
         order = self.sim._get_order(self.robot.order_id)
         stock = self.sim._get_stock_item(order.item_id)
+        initial_quantity = stock.quantity
+        storage_position = stock.position
         start = self.robot.position
         for _ in range(5):
             self.sim.tick()
@@ -43,7 +45,8 @@ class DriverWorkflowTests(unittest.TestCase):
         self.assertNotEqual(order.status, 'completed')
         self.act('deliver')
         self.assertEqual(order.status, 'completed')
-        self.assertEqual(stock.position, order.dropoff)
+        self.assertEqual(stock.position, storage_position)
+        self.assertEqual(stock.quantity, initial_quantity - order.quantity)
         self.assertIsNone(stock.reserved_by)
         with self.assertRaises(ValueError):
             self.sim.driver_action(self.robot.id, order.id, 'deliver')
@@ -74,7 +77,8 @@ class DriverWorkflowTests(unittest.TestCase):
                 break
         else:
             self.fail('Shift did not complete and return to parking')
-        self.assertTrue(all(item.status == 'delivered' for item in self.sim.warehouse.inventory))
+        self.assertTrue(all(order.picked_quantity == order.quantity for order in self.sim.warehouse.orders))
+        self.assertTrue(all(item.quantity >= 0 for item in self.sim.warehouse.inventory))
 
     def test_no_route_waits_and_reopening_recovers(self):
         self.sim.zone_agent.blocked_cells.update({(0, 0), (0, 2), (1, 1)})
