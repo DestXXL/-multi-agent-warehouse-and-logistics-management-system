@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { formatCoordinates, formatDimensions, formatMillimeters, formatPercent, formatSquareMillimeters, occupancyPercent } from './units'
 
@@ -64,6 +64,26 @@ type EventItem = {
   message: string
 }
 
+type ToastItem = { id: string; source: string; message: string }
+type OrderStatusFilter = 'all' | Order['status']
+type PhysicalScale = { cellStepM: number; forkliftLengthM: number; forkliftWidthM: number }
+type AisleLabel = { widthM: number; gapCells: number; fitsForklift: boolean }
+
+const DEFAULT_PHYSICAL_SCALE: PhysicalScale = { cellStepM: 3, forkliftLengthM: 2.4, forkliftWidthM: 1.1 }
+
+function readPhysicalScale(): PhysicalScale {
+  try {
+    const saved = JSON.parse(localStorage.getItem('warehouse-visual-scale') || 'null') as Partial<PhysicalScale> | null
+    return {
+      cellStepM: typeof saved?.cellStepM === 'number' && saved.cellStepM > 0 ? saved.cellStepM : DEFAULT_PHYSICAL_SCALE.cellStepM,
+      forkliftLengthM: typeof saved?.forkliftLengthM === 'number' && saved.forkliftLengthM > 0 ? saved.forkliftLengthM : DEFAULT_PHYSICAL_SCALE.forkliftLengthM,
+      forkliftWidthM: typeof saved?.forkliftWidthM === 'number' && saved.forkliftWidthM > 0 ? saved.forkliftWidthM : DEFAULT_PHYSICAL_SCALE.forkliftWidthM,
+    }
+  } catch {
+    return DEFAULT_PHYSICAL_SCALE
+  }
+}
+
 type State = {
   running: boolean
   tick: number
@@ -115,6 +135,80 @@ function key([x, y]: [number, number]) {
   return `${x},${y}`
 }
 
+function findAisleLabels(warehouse: State['warehouse'] | undefined, cellStepM: number, forkliftWidthM: number) {
+  const labels = new Map<string, AisleLabel>()
+  if (!warehouse?.racks?.length) return labels
+  const blocked = new Set(warehouse.obstacles.map(key))
+
+  const addGap = (first: Rack, second: Rack, axis: 'x' | 'y') => {
+    const firstCoordinate = first.position[axis === 'x' ? 0 : 1]
+    const secondCoordinate = second.position[axis === 'x' ? 0 : 1]
+    const gapCells = secondCoordinate - firstCoordinate
+    if (gapCells <= 1) return
+    for (let coordinate = firstCoordinate + 1; coordinate < secondCoordinate; coordinate += 1) {
+      const point: [number, number] = axis === 'x' ? [coordinate, first.position[1]] : [first.position[0], coordinate]
+      if (blocked.has(key(point))) return
+    }
+    const center: [number, number] = axis === 'x'
+      ? [Math.floor((firstCoordinate + secondCoordinate) / 2), first.position[1]]
+      : [first.position[0], Math.floor((firstCoordinate + secondCoordinate) / 2)]
+    const firstSpanM = (axis === 'x' ? first.width_mm : first.depth_mm) / 1000
+    const secondSpanM = (axis === 'x' ? second.width_mm : second.depth_mm) / 1000
+    const widthM = Math.max(0, gapCells * cellStepM - (firstSpanM + secondSpanM) / 2)
+    const label = { widthM, gapCells: gapCells - 1, fitsForklift: widthM >= forkliftWidthM }
+    const existing = labels.get(key(center))
+    if (!existing || label.widthM < existing.widthM) labels.set(key(center), label)
+  }
+
+  const rows = new Map<number, Rack[]>()
+  const columns = new Map<number, Rack[]>()
+  warehouse.racks.forEach(rack => {
+    const row = rows.get(rack.position[1]) ?? []
+    row.push(rack)
+    rows.set(rack.position[1], row)
+    const column = columns.get(rack.position[0]) ?? []
+    column.push(rack)
+    columns.set(rack.position[0], column)
+  })
+  rows.forEach(racks => {
+    const sorted = racks.slice().sort((a, b) => a.position[0] - b.position[0])
+    for (let index = 1; index < sorted.length; index += 1) addGap(sorted[index - 1], sorted[index], 'x')
+  })
+  columns.forEach(racks => {
+    const sorted = racks.slice().sort((a, b) => a.position[1] - b.position[1])
+    for (let index = 1; index < sorted.length; index += 1) addGap(sorted[index - 1], sorted[index], 'y')
+  })
+  const compacted = new Map<string, AisleLabel>()
+  const pending = new Set(labels.keys())
+  while (pending.size) {
+    const start = pending.values().next().value as string
+    const reference = labels.get(start)!
+    const group: string[] = []
+    const queue = [start]
+    pending.delete(start)
+    while (queue.length) {
+      const current = queue.shift()!
+      group.push(current)
+      const [x, y] = current.split(',').map(Number)
+      for (const neighbor of [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`]) {
+        const candidate = labels.get(neighbor)
+        if (pending.has(neighbor) && candidate && candidate.fitsForklift === reference.fitsForklift && Math.abs(candidate.widthM - reference.widthM) < 0.25) {
+          pending.delete(neighbor)
+          queue.push(neighbor)
+        }
+      }
+    }
+    group.sort((first, second) => {
+      const [firstX, firstY] = first.split(',').map(Number)
+      const [secondX, secondY] = second.split(',').map(Number)
+      return firstY - secondY || firstX - secondX
+    })
+    const center = group[Math.floor(group.length / 2)]
+    compacted.set(center, labels.get(center)!)
+  }
+  return compacted
+}
+
 function App() {
   const [state, setState] = useState<State | null>(null)
   const [connection, setConnection] = useState<'online' | 'offline'>('offline')
@@ -122,6 +216,17 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [rackTip, setRackTip] = useState<{ rack: Rack; anchor: HTMLElement; pinned: boolean } | null>(null)
   const [selectedRackId, setSelectedRackId] = useState<string | null>(null)
+  const [orderQuery, setOrderQuery] = useState('')
+  const [orderStatusFilter, setOrderStatusFilter] = useState<OrderStatusFilter>('all')
+  const [highlightedRobotId, setHighlightedRobotId] = useState<string | null>(null)
+  const [physicalScale, setPhysicalScale] = useState<PhysicalScale>(readPhysicalScale)
+  const [physicalScaleDraft, setPhysicalScaleDraft] = useState(() => {
+    const saved = readPhysicalScale()
+    return { cellStepM: String(saved.cellStepM), forkliftLengthM: String(saved.forkliftLengthM), forkliftWidthM: String(saved.forkliftWidthM) }
+  })
+  const [toasts, setToasts] = useState<ToastItem[]>([])
+  const seenEventIds = useRef<Set<string> | null>(null)
+  const toastTimers = useRef<Set<number>>(new Set())
   const [, setTipPositionVersion] = useState(0)
   const [screen, setScreen] = useState<'control' | 'driver'>(() => new URLSearchParams(window.location.search).get('view') === 'driver' ? 'driver' : 'control')
   const [driverId, setDriverId] = useState(() => new URLSearchParams(window.location.search).get('vehicle') || 'R-01')
@@ -176,6 +281,30 @@ function App() {
 
   const warehouse = state?.warehouse
   useEffect(() => {
+    try { localStorage.setItem('warehouse-visual-scale', JSON.stringify(physicalScale)) } catch { /* Browser storage is optional. */ }
+  }, [physicalScale])
+  useEffect(() => () => toastTimers.current.forEach(timer => window.clearTimeout(timer)), [])
+  useEffect(() => {
+    if (!state) return
+    const eventIds = new Set(state.events.map(event => event.id))
+    if (seenEventIds.current === null) {
+      seenEventIds.current = eventIds
+      return
+    }
+    const freshEvents = state.events.filter(event => !seenEventIds.current?.has(event.id)).slice(0, 3)
+    seenEventIds.current = eventIds
+    if (!freshEvents.length) return
+    const nextToasts = freshEvents.slice().reverse().map(event => ({ id: event.id, source: event.source, message: event.message }))
+    setToasts(current => [...nextToasts, ...current].slice(0, 4))
+    nextToasts.forEach(toast => {
+      const timer = window.setTimeout(() => {
+        setToasts(current => current.filter(item => item.id !== toast.id))
+        toastTimers.current.delete(timer)
+      }, 5000)
+      toastTimers.current.add(timer)
+    })
+  }, [state?.events])
+  useEffect(() => {
     if (!rackTip) return
     const reposition = () => setTipPositionVersion(value => value + 1)
     const dismiss = (event: PointerEvent) => {
@@ -204,21 +333,53 @@ function App() {
   const driverRobot = robots.find((robot) => robot.id === driverId) ?? robots[0]
   const driverOrder = orders.find((order) => order.id === driverRobot?.order_id)
   const driverTarget = driverOrder ? (['to_pickup', 'confirm_pickup', 'offered'].includes(driverRobot?.driver_phase || '') ? driverOrder.pickup : driverOrder.dropoff) : driverRobot?.driver_phase === 'returning' ? driverRobot.home : null
+  const aisleLabels = useMemo(() => findAisleLabels(warehouse, physicalScale.cellStepM, physicalScale.forkliftWidthM), [warehouse, physicalScale.cellStepM, physicalScale.forkliftWidthM])
+  const filteredOrders = useMemo(() => {
+    const query = orderQuery.trim().toLocaleLowerCase('ru')
+    return orders.filter(order => {
+      const matchesStatus = orderStatusFilter === 'all' || order.status === orderStatusFilter
+      const searchable = [order.id, order.item, order.product_id, order.robot_id, order.storage_location_id]
+        .filter(Boolean).join(' ').toLocaleLowerCase('ru')
+      return matchesStatus && (!query || searchable.includes(query))
+    })
+  }, [orders, orderQuery, orderStatusFilter])
+
+  function showOrderRoute(robotId: string) {
+    setHighlightedRobotId(robotId)
+    window.requestAnimationFrame(() => document.getElementById('warehouse-map-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+  }
+
+  function updatePhysicalScale(field: keyof PhysicalScale, value: string) {
+    setPhysicalScaleDraft(current => ({ ...current, [field]: value }))
+    if (value.endsWith('.') || value.trim() === '') return
+    const parsed = Number(value)
+    const limits: Record<keyof PhysicalScale, [number, number]> = { cellStepM: [0.5, 20], forkliftLengthM: [0.5, 10], forkliftWidthM: [0.5, 5] }
+    if (!Number.isFinite(parsed) || parsed < limits[field][0] || parsed > limits[field][1]) return
+    setPhysicalScale(current => ({ ...current, [field]: parsed }))
+  }
+
+  function resetPhysicalScale() {
+    setPhysicalScale(DEFAULT_PHYSICAL_SCALE)
+    setPhysicalScaleDraft({ cellStepM: String(DEFAULT_PHYSICAL_SCALE.cellStepM), forkliftLengthM: String(DEFAULT_PHYSICAL_SCALE.forkliftLengthM), forkliftWidthM: String(DEFAULT_PHYSICAL_SCALE.forkliftWidthM) })
+  }
 
   const cellMap = useMemo(() => {
-    const cells = new Map<string, { obstacle?: boolean; rack?: Rack; closed?: boolean; route?: boolean; pickup?: boolean; shipping?: boolean; robot?: Robot }>()
+    const cells = new Map<string, { obstacle?: boolean; rack?: Rack; closed?: boolean; route?: boolean; pickup?: boolean; shipping?: boolean; robot?: Robot; aisle?: AisleLabel }>()
     warehouse?.obstacles.forEach((point) => cells.set(key(point), { obstacle: true }))
     warehouse?.racks?.forEach((rack) => cells.set(key(rack.position), { ...cells.get(key(rack.position)), rack }))
     warehouse?.closed_cells.forEach((point) => cells.set(key(point), { ...cells.get(key(point)), closed: true }))
     warehouse?.pickup_points.forEach((point) => cells.set(key(point), { ...cells.get(key(point)), pickup: true }))
     warehouse?.shipping_points.forEach((point) => cells.set(key(point), { ...cells.get(key(point)), shipping: true }))
-    robots.filter((robot) => screen === 'control' || robot.id === driverRobot?.id).forEach((robot) => robot.route.forEach((point) => {
+    aisleLabels.forEach((aisle, pointKey) => cells.set(pointKey, { ...cells.get(pointKey), aisle }))
+    robots.filter((robot) => screen === 'control'
+      ? (!highlightedRobotId || robot.id === highlightedRobotId)
+      : robot.id === driverRobot?.id).forEach((robot) => robot.route.forEach((point) => {
       const cellKey = key(point)
       cells.set(cellKey, { ...cells.get(cellKey), route: true })
     }))
     robots.forEach((robot) => cells.set(key(robot.position), { ...cells.get(key(robot.position)), robot }))
     return cells
-  }, [warehouse, robots, screen, driverRobot])
+  }, [warehouse, robots, screen, driverRobot, highlightedRobotId, aisleLabels])
 
   async function command(path: string, body?: unknown) {
     setBusy(true)
@@ -254,17 +415,20 @@ function App() {
     const y = Math.floor(index / warehouse!.width)
     const cell = cellMap.get(`${x},${y}`)
     return (
-      <div title={cell?.rack ? undefined : `Ячейка ${x}, ${y}`} className={`map-cell ${screen === 'driver' && driverTarget && key(driverTarget) === `${x},${y}` ? 'target-cell' : ''} ${cell?.obstacle ? 'shelf-cell' : ''} ${cell?.closed ? 'closed-cell' : ''} ${cell?.route ? 'route-cell' : ''} ${cell?.pickup ? 'pickup-cell' : ''} ${cell?.shipping ? 'shipping-cell' : ''}`} key={`${x}-${y}`}>
+      <div title={cell?.aisle ? `Расчётный проезд: ${cell.aisle.widthM.toFixed(1)} м; свободно ${cell.aisle.gapCells} клеток. Демо-масштаб.` : cell?.rack ? undefined : `Ячейка ${x}, ${y}`} className={`map-cell ${screen === 'driver' && driverTarget && key(driverTarget) === `${x},${y}` ? 'target-cell' : ''} ${cell?.obstacle ? 'shelf-cell' : ''} ${cell?.closed ? 'closed-cell' : ''} ${cell?.route ? 'route-cell' : ''} ${cell?.pickup ? 'pickup-cell' : ''} ${cell?.shipping ? 'shipping-cell' : ''}`} key={`${x}-${y}`}>
         {screen === 'driver' && driverTarget && key(driverTarget) === `${x},${y}` && !cell?.robot && <span className="destination-pin">ЦЕЛЬ</span>}
-        {cell?.rack && <button type="button" className="shelf" aria-label={`Стеллаж ${cell.rack.id}, ${formatMillimeters(cell.rack.width_mm)} на ${formatMillimeters(cell.rack.depth_mm)} м, ${cell.rack.levels} ярусов`} aria-haspopup="dialog" aria-describedby={rackTip?.rack.id === cell.rack.id ? 'rack-tooltip' : undefined} onMouseEnter={event => openRackTip(cell.rack!, event.currentTarget)} onMouseLeave={() => setRackTip(current => current?.pinned ? current : null)} onFocus={event => openRackTip(cell.rack!, event.currentTarget)} onBlur={() => setRackTip(current => current?.pinned ? current : null)} onClick={() => { setRackTip(null); setSelectedRackId(cell.rack!.id) }}><span>▤</span><small>RACK</small></button>}
+        {cell?.aisle && <span className={`aisle-dimension-label ${cell.aisle.fitsForklift ? '' : 'too-narrow'}`}>{cell.aisle.widthM.toFixed(1)} м</span>}
+        {cell?.rack && <button type="button" className="shelf" style={{ width: `${Math.min(240, Math.max(30, cell.rack.width_mm / 1000 / physicalScale.cellStepM * 100))}%`, height: `${Math.min(240, Math.max(30, cell.rack.depth_mm / 1000 / physicalScale.cellStepM * 100))}%` }} aria-label={`Стеллаж ${cell.rack.id}, ${formatMillimeters(cell.rack.width_mm)} на ${formatMillimeters(cell.rack.depth_mm)} м, ${cell.rack.levels} ярусов`} aria-haspopup="dialog" aria-describedby={rackTip?.rack.id === cell.rack.id ? 'rack-tooltip' : undefined} onMouseEnter={event => openRackTip(cell.rack!, event.currentTarget)} onMouseLeave={() => setRackTip(current => current?.pinned ? current : null)} onFocus={event => openRackTip(cell.rack!, event.currentTarget)} onBlur={() => setRackTip(current => current?.pinned ? current : null)} onClick={() => { setRackTip(null); setSelectedRackId(cell.rack!.id) }}><span>▤</span><small className="shelf-size">{(cell.rack.width_mm / 1000).toFixed(1)} × {(cell.rack.depth_mm / 1000).toFixed(1)} м</small></button>}
         {cell?.obstacle && !cell.rack && <div className="shelf"><span>▤</span><small>RACK</small></div>}
         {cell?.closed && <span className="closed-marker">!</span>}
         {cell?.pickup && !cell.robot && <span className="zone-pin pickup-pin">P</span>}
         {cell?.shipping && !cell.robot && <span className="zone-pin shipping-pin">OUT</span>}
         {cell?.robot && (
-          <div className={`robot-token ${cell.robot.status} ${screen === 'driver' && cell.robot.id !== driverRobot?.id ? 'other-vehicle' : ''}`} title={`${cell.robot.id} · ${robotNames[cell.robot.status]}`}>
-            <span className="robot-glyph">▰</span><b>{screen === 'driver' && cell.robot.id === driverRobot?.id ? 'Я' : cell.robot.id.slice(-2)}</b>
-            {cell.robot.carrying_item && <i className="cargo-dot" />}
+          <div className={`robot-token ${screen === 'control' && highlightedRobotId === cell.robot.id ? 'is-highlighted' : ''}`}>
+            <div className={`forklift-footprint ${cell.robot.status} ${screen === 'driver' && cell.robot.id !== driverRobot?.id ? 'other-vehicle' : ''} ${cell.robot.route[0] && cell.robot.route[0][1] === cell.robot.position[1] ? 'horizontal' : ''}`} style={{ width: `${Math.min(220, Math.max(42, physicalScale.forkliftWidthM / physicalScale.cellStepM * 100))}%`, height: `${Math.min(220, Math.max(54, physicalScale.forkliftLengthM / physicalScale.cellStepM * 100))}%` }} title={`${cell.robot.id} · ${robotNames[cell.robot.status]} · габарит ${physicalScale.forkliftLengthM.toFixed(1)} × ${physicalScale.forkliftWidthM.toFixed(1)} м (демо)`}>
+              <span className="robot-glyph">▰</span><b>{screen === 'driver' && cell.robot.id === driverRobot?.id ? 'Я' : cell.robot.id.slice(-2)}</b>
+              {cell.robot.carrying_item && <i className="cargo-dot" />}
+            </div>
           </div>
         )}
       </div>
@@ -281,6 +445,7 @@ function App() {
     <div className="app-shell">
       {activeRack && createPortal(<RackPreview rack={activeRack} style={{ left: tipLeft, top: tipTop }} />, document.body)}
       {selectedRackData && createPortal(<RackDetails rack={selectedRackData} locations={warehouse!.storage_locations.filter(location => location.rack_id === selectedRackData.id)} onClose={() => setSelectedRackId(null)} />, document.body)}
+      {toasts.length > 0 && <div className="toast-stack" role="status" aria-live="polite">{toasts.map(toast => <div className="event-toast" key={toast.id}><span className={`toast-source ${toast.source}`} /><p>{toast.message}</p><button type="button" aria-label="Закрыть уведомление" onClick={() => setToasts(current => current.filter(item => item.id !== toast.id))}>×</button></div>)}</div>}
       <header className="topbar">
         <div className="brand-lockup"><div className="brand-mark">W</div><div><strong>WAREHOUSE</strong><span>CONTROL ROOM</span></div></div>
         <div className="topbar-center"><span className={`connection-dot ${connection}`} />{connection === 'online' ? 'СВЯЗЬ С СИМУЛЯЦИЕЙ УСТАНОВЛЕНА' : 'ПОДКЛЮЧЕНИЕ К СЕРВЕРУ…'}</div>
@@ -291,7 +456,7 @@ function App() {
         {error && <div className="workflow-error" role="alert">{error}</div>}
         {connection === 'offline' && <div className="workflow-error" role="status">Связь потеряна. Показано последнее известное состояние; команды недоступны.</div>}
         {screen === 'driver' ? (
-          driverRobot ? <DriverTablet robot={driverRobot} robots={robots} order={driverOrder} width={warehouse!.width} cells={cells} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
+          driverRobot ? <DriverTablet robot={driverRobot} robots={robots} order={driverOrder} width={warehouse!.width} cells={cells} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
         ) : <>
         <section className="main-column">
           <div className="page-heading">
@@ -306,27 +471,30 @@ function App() {
             <Metric label="ТАКТ СИМУЛЯЦИИ" value={String(state.tick).padStart(4, '0')} accent="violet" icon="◷" />
           </div>
 
-          <section className="panel map-panel">
+          <section className="panel map-panel" id="warehouse-map-panel">
             <div className="panel-heading map-heading">
-              <div><p className="eyebrow">LIVE FLOOR PLAN</p><h2>Карта склада <span className="soft-tag">ЗОНА A · 12 × 8</span></h2></div>
+              <div><p className="eyebrow">LIVE FLOOR PLAN</p><h2>Карта склада <span className="soft-tag">{warehouse!.width} × {warehouse!.height}</span></h2></div>
               <div className="map-actions"><span className="map-live"><i /> LIVE</span><button className="icon-button" title="Обновление в реальном времени">⌁</button></div>
             </div>
-            <div className="map-legend"><span><i className="legend-dot robot-dot" /> Виртуальный погрузчик</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box pickup-dot" /> Комплектация</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> Маршрут</span></div>
+            <div className="map-dimension-controls"><label title="Расстояние между центрами соседних клеток">Шаг сетки <span><input type="number" min="0.5" max="20" step="0.1" value={physicalScaleDraft.cellStepM} onChange={event => updatePhysicalScale('cellStepM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, cellStepM: String(physicalScale.cellStepM) }))} /> м</span></label><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Примерный шаг сетки · ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div>
+            <div className="map-legend"><span><i className="legend-dot robot-dot" /> Погрузчик в масштабе</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box pickup-dot" /> Комплектация</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> {highlightedRobotId ? `Маршрут ${highlightedRobotId}` : 'Маршруты'}</span><span><i className="legend-box aisle-dot" /> Проезд · м</span><span className="aisle-warning-legend">Красный — уже погрузчика</span>{highlightedRobotId && <button className="clear-route-button" type="button" onClick={() => setHighlightedRobotId(null)}>Показать все</button>}</div>
             <div className="map-scroll"><div className="warehouse-map" style={{ gridTemplateColumns: `repeat(${warehouse!.width}, minmax(42px, 1fr))` }}>{cells}</div></div>
-            <div className="map-footer"><span><i className="footer-pulse" /> Карта обновляется автоматически</span><span>СХЕМА · КЛЕТКИ БЕЗ ФИЗИЧЕСКОГО МАСШТАБА</span></div>
+            <div className="map-footer"><span><i className="footer-pulse" /> Карта обновляется автоматически</span><span>ОЦЕНОЧНЫЕ ГАБАРИТЫ · СИМУЛЯЦИЯ ДВИГАЕТСЯ ПО ЦЕНТРАМ КЛЕТОК И НЕ ПРОВЕРЯЕТ КОЛЛИЗИИ КОРПУСА</span></div>
           </section>
 
           <div className="lower-grid">
             <section className="panel orders-panel">
-              <div className="panel-heading compact-heading"><div><p className="eyebrow">FULFILLMENT</p><h2>Очередь заказов</h2></div><span className="count-pill">{orders.length} ЗАКАЗА</span></div>
+              <div className="panel-heading compact-heading"><div><p className="eyebrow">FULFILLMENT</p><h2>Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span></div>
+              <div className="order-tools"><div className="order-search"><span aria-hidden="true">⌕</span><input value={orderQuery} onChange={event => setOrderQuery(event.target.value)} placeholder="Найти заказ или товар" aria-label="Поиск заказов" /><button type="button" aria-label="Очистить поиск" onClick={() => setOrderQuery('')} disabled={!orderQuery}>×</button></div><label className="order-filter"><span>Статус</span><select value={orderStatusFilter} onChange={event => setOrderStatusFilter(event.target.value as OrderStatusFilter)} aria-label="Фильтр по статусу"><option value="all">Все</option>{Object.entries(orderNames).map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select></label></div>
               <div className="order-list">
-                {orders.map((order) => <OrderRow key={order.id} order={order} />)}
+                {filteredOrders.map((order) => <OrderRow key={order.id} order={order} highlightedRobotId={highlightedRobotId} onShowRoute={showOrderRoute} />)}
+                {filteredOrders.length === 0 && <div className="order-empty">Заказы по этому запросу не найдены.</div>}
               </div>
             </section>
             <section className="panel fleet-panel">
             <div className="panel-heading compact-heading"><div><p className="eyebrow">FLEET STATUS</p><h2>Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span></div>
               <div className="fleet-list">
-                {robots.map((robot) => <div className="fleet-row" key={robot.id}><div className="fleet-icon">✣</div><div className="fleet-info"><strong>{robot.id}<small>{phaseNames[robot.driver_phase]}</small></strong><span>{robot.order_id ? `Задание ${robot.order_id}` : 'Нет активного задания'}</span></div><a className="driver-link" href={`?view=driver&vehicle=${robot.id}`} target="_blank" rel="noreferrer">Планшет ↗</a><button className="stop-button" disabled={busy || connection !== 'online'} onClick={() => command(`/api/robots/${robot.id}/${robot.status === 'stopped' ? 'resume' : 'stop'}`)}>{robot.status === 'stopped' ? '▶' : 'Ⅱ'}</button></div>)}
+                {robots.map((robot) => <div className={`fleet-row ${highlightedRobotId === robot.id ? 'is-selected' : ''}`} key={robot.id}><div className="fleet-icon">✣</div><div className="fleet-info"><strong>{robot.id}<small>{phaseNames[robot.driver_phase]}</small></strong><span>{robot.order_id ? `Задание ${robot.order_id}` : 'Нет активного задания'}</span></div><button type="button" className="fleet-map-button" aria-pressed={highlightedRobotId === robot.id} onClick={() => setHighlightedRobotId(current => current === robot.id ? null : robot.id)}>{highlightedRobotId === robot.id ? 'На карте ✓' : 'Показать'}</button><a className="driver-link" href={`?view=driver&vehicle=${robot.id}`} target="_blank" rel="noreferrer">Планшет ↗</a><button className="stop-button" disabled={busy || connection !== 'online'} onClick={() => command(`/api/robots/${robot.id}/${robot.status === 'stopped' ? 'resume' : 'stop'}`)}>{robot.status === 'stopped' ? '▶' : 'Ⅱ'}</button></div>)}
               </div>
             </section>
           </div>
@@ -374,9 +542,9 @@ function Metric({ label, value, accent, icon }: { label: string; value: string; 
   return <div className="metric-card"><div><span className="metric-label">{label}</span><strong>{value}</strong></div><span className={`metric-icon ${accent}`}>{icon}</span></div>
 }
 
-function OrderRow({ order }: { order: Order }) {
+function OrderRow({ order, highlightedRobotId, onShowRoute }: { order: Order; highlightedRobotId: string | null; onShowRoute: (robotId: string) => void }) {
   const addresses = order.allocations.map(allocation => `${allocation.storage_location_id} (${allocation.quantity} шт.)`).join(' · ')
-  return <div className="order-row"><div className={`order-symbol ${order.status === 'completed' ? 'done' : ''}`}>{order.status === 'completed' ? '✓' : '↗'}</div><div className="order-main"><strong>{order.id}<span>{order.item} · {order.quantity} шт.</span></strong><small>{order.length_mm && order.width_mm && order.height_mm ? `${formatDimensions(order.length_mm, order.width_mm, order.height_mm)} · ` : ''}{order.robot_id ? `Погрузчик ${order.robot_id}` : 'Ожидает назначения'}{addresses ? ` · ${addresses}` : order.storage_location_id ? ` · ${order.storage_location_id}` : ''}</small></div><div className="order-state"><span className={`order-status ${order.status}`}>{orderNames[order.status]}</span><small>{order.pickup.join(', ')} → {order.dropoff.join(', ')}</small></div></div>
+  return <div className="order-row"><div className={`order-symbol ${order.status === 'completed' ? 'done' : ''}`}>{order.status === 'completed' ? '✓' : '↗'}</div><div className="order-main"><strong>{order.id}<span>{order.item} · {order.quantity} шт.</span></strong><small>{order.length_mm && order.width_mm && order.height_mm ? `${formatDimensions(order.length_mm, order.width_mm, order.height_mm)} · ` : ''}{order.robot_id ? `Погрузчик ${order.robot_id}` : 'Ожидает назначения'}{addresses ? ` · ${addresses}` : order.storage_location_id ? ` · ${order.storage_location_id}` : ''}</small></div><div className="order-state"><span className={`order-status ${order.status}`}>{orderNames[order.status]}</span><small>{order.pickup.join(', ')} → {order.dropoff.join(', ')}</small>{order.robot_id && <button className="order-map-action" type="button" aria-pressed={highlightedRobotId === order.robot_id} onClick={() => onShowRoute(order.robot_id!)}>{highlightedRobotId === order.robot_id ? 'Маршрут выбран' : 'Показать маршрут ↗'}</button>}</div></div>
 }
 
 const phaseNames: Record<Robot['driver_phase'], string> = {
@@ -384,8 +552,8 @@ const phaseNames: Record<Robot['driver_phase'], string> = {
   confirm_pickup: 'Ждёт подтверждения забора', to_dropoff: 'Везёт товар', confirm_delivery: 'Ждёт подтверждения доставки',
 }
 
-function DriverTablet({ robot, robots, order, width, cells, running, busy, online, events, onSelect, onCommand }: {
-  robot: Robot; robots: Robot[]; order?: Order; width: number; cells: React.ReactNode;
+function DriverTablet({ robot, robots, order, width, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
+  robot: Robot; robots: Robot[]; order?: Order; width: number; cells: React.ReactNode; physicalScale: PhysicalScale;
   running: boolean; busy: boolean; online: boolean; events: EventItem[];
   onSelect: (id: string) => void; onCommand: (path: string, body?: unknown) => Promise<void>;
 }) {
@@ -424,7 +592,7 @@ function DriverTablet({ robot, robots, order, width, cells, running, busy, onlin
         </div>
         <p className="tablet-hint">В этом режиме движение моделируется. Забор и доставка выполняются только после вашего подтверждения.</p>
       </section>
-      <section className="tablet-map panel"><div className="tablet-map-title"><div><p className="eyebrow">НАВИГАЦИЯ · {robot.id}</p><h2>{destination ? `Цель: ${destination.join(' · ')}` : 'Карта склада'}</h2></div><span className="map-live">{online ? '● На связи' : '○ Нет связи'}</span></div>
+      <section className="tablet-map panel"><div className="tablet-map-title"><div><p className="eyebrow">НАВИГАЦИЯ · {robot.id}</p><h2>{destination ? `Цель: ${destination.join(' · ')}` : 'Карта склада'}</h2><small className="tablet-dimensions">Шаг сетки {physicalScale.cellStepM.toFixed(1)} м · габарит {physicalScale.forkliftLengthM.toFixed(1)} × {physicalScale.forkliftWidthM.toFixed(1)} м (демо)</small></div><span className="map-live">{online ? '● На связи' : '○ Нет связи'}</span></div>
       {robot.status === 'waiting' && ['to_pickup', 'to_dropoff', 'returning'].includes(robot.driver_phase) && <div className="workflow-notice">Свободного пути нет. Ожидайте открытия прохода диспетчером.</div>}
       {robot.route_version > 0 && <div className="route-update">Маршрут пересмотрен · версия {robot.route_version}</div>}
       <div className="map-legend"><span><i className="legend-dot robot-dot" /> Вы · Я</span><span><i className="legend-box route-dot" /> Ваш маршрут</span><span>Серые метки — другая техника</span><span>! — перекрытый проход</span></div>
