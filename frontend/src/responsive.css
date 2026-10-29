@@ -153,6 +153,130 @@ body { min-width: 0; }
  .rack-filter-row { flex-wrap: wrap; }
  .storage-slot-specs { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Map-first home screen: keep the full floor plan visible and open utilities as dialogs. */
+.workspace:not(.driver-workspace) { width: 100%; max-width: 1920px; grid-template-columns: minmax(0,1fr); gap: 0; }
+.workspace:not(.driver-workspace) > .main-column { display: grid; grid-template-columns: minmax(0,1fr); align-items: start; gap: 14px; min-width: 0; }
+.workspace:not(.driver-workspace) > .main-column > .page-heading,
+.workspace:not(.driver-workspace) > .main-column > .metric-row,
+.workspace:not(.driver-workspace) > .main-column > .module-launcher,
+.workspace:not(.driver-workspace) > .main-column > .map-panel { grid-column: 1; min-width: 0; margin: 0; }
+.workspace:not(.driver-workspace) > .main-column > .map-panel { grid-row: 4; padding: 16px; }
+.workspace:not(.driver-workspace) > .main-column > .lower-grid,
+.workspace:not(.driver-workspace) > .side-column { display: contents; }
+.workspace:not(.driver-workspace) > .main-column > .object-inspector,
+.workspace:not(.driver-workspace) > .main-column > .inventory-panel,
+.workspace:not(.driver-workspace) .orders-panel,
+.workspace:not(.driver-workspace) .fleet-panel,
+.workspace:not(.driver-workspace) .activity-panel,
+.workspace:not(.driver-workspace) .control-panel,
+.workspace:not(.driver-workspace) .agent-panel,
+.workspace:not(.driver-workspace) > .side-column > .footnote { display: none !important; }
+.workspace:not(.driver-workspace) > .main-column > .map-panel .warehouse-scene { height: clamp(430px,68dvh,900px); min-height: 430px; max-height: none; }
+.module-launcher { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.module-launcher-label { margin: 0 4px 0 2px; color: var(--muted); font: 600 11px/1.2 var(--mono); letter-spacing: .5px; }
+.module-launcher button { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--background); color: var(--ink); font-size: 13px; font-weight: 600; }
+.module-launcher button:hover, .module-launcher button[aria-expanded="true"] { border-color: var(--accent); background: color-mix(in srgb,var(--accent) 10%,transparent); color: var(--ink); }
+.module-launcher button i { color: var(--accent); font-style: normal; font-size: 15px; }
+.module-launcher button b { min-width: 20px; padding: 2px 5px; border-radius: 4px; background: var(--surface-raised); color: var(--ink); font: 600 11px/1.2 var(--mono); text-align: center; }
+.workspace-hint { color: var(--muted); font-size: 12px; }
+
+.module-dialog-backdrop { position: fixed; z-index: 1100; inset: 0; background: #050a10bd; backdrop-filter: blur(4px); }
+.app-shell.dialog-orders .orders-panel,
+.app-shell.dialog-fleet .fleet-panel,
+.app-shell.dialog-inventory .inventory-panel,
+.app-shell.dialog-control .control-panel,
+.app-shell.dialog-agents .agent-panel,
+.app-shell.dialog-activity .activity-panel,
+.app-shell.dialog-object .object-inspector {
+  position: fixed !important; z-index: 1101; inset: 50% auto auto 50%; display: flex !important;
+  flex-direction: column; width: min(1000px,calc(100vw - 36px)); max-height: min(86dvh,1000px); min-height: 0;
+  margin: 0 !important; padding: 20px; overflow: auto; overscroll-behavior: contain;
+  transform: translate(-50%,-50%); box-shadow: 0 24px 80px #0008;
+}
+.app-shell.dialog-control .control-panel, .app-shell.dialog-agents .agent-panel { width: min(760px,calc(100vw - 36px)); }
+.app-shell.dialog-orders .orders-panel, .app-shell.dialog-activity .activity-panel { display: block !important; }
+.app-shell.dialog-fleet .fleet-panel, .app-shell.dialog-inventory .inventory-panel { display: block !important; }
+.app-shell.dialog-object .object-inspector { display: block !important; }
+.app-shell.dialog-orders .orders-panel .order-list,
+.app-shell.dialog-activity .activity-panel .event-list { max-height: min(58dvh,620px); overflow: auto; }
+.module-dialog-close { position: fixed; z-index: 1103; top: max(20px,calc((100dvh - min(86dvh,1000px))/2 + 10px)); left: calc(50% + min(500px,50vw - 18px) - 48px); width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #49606d; border-radius: 6px; background: #1b2933; color: #eaf2f4; font-size: 23px; line-height: 1; }
+.module-dialog-close:hover { background: #2a3d49; border-color: var(--accent); }
+.app-shell.dialog-agents .agent-subgrid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.app-shell.dialog-agents .agent-mini { min-width: 0; }
+.app-shell.dialog-agents .agent-mini strong, .app-shell.dialog-agents .agent-mini > span { white-space: normal; overflow-wrap: anywhere; }
+.app-shell.dialog-agents .agent-note p { min-width: 0; overflow-wrap: anywhere; }
+.app-shell.dialog-object .workspace:not(.driver-workspace) .object-inspector { display: block !important; }
+.app-shell.dialog-orders .workspace:not(.driver-workspace) .orders-panel,
+.app-shell.dialog-fleet .workspace:not(.driver-workspace) .fleet-panel,
+.app-shell.dialog-inventory .workspace:not(.driver-workspace) .inventory-panel,
+.app-shell.dialog-control .workspace:not(.driver-workspace) .control-panel,
+.app-shell.dialog-agents .workspace:not(.driver-workspace) .agent-panel,
+.app-shell.dialog-activity .workspace:not(.driver-workspace) .activity-panel { display: flex !important; }
+.app-shell.dialog-orders .workspace:not(.driver-workspace) .orders-panel,
+.app-shell.dialog-activity .workspace:not(.driver-workspace) .activity-panel,
+.app-shell.dialog-fleet .workspace:not(.driver-workspace) .fleet-panel,
+.app-shell.dialog-inventory .workspace:not(.driver-workspace) .inventory-panel { display: block !important; }
+
+@media (min-width: 1800px) {
+  .workspace:not(.driver-workspace) > .main-column { display: grid; grid-template-columns: minmax(0,1fr); }
+  .workspace:not(.driver-workspace) > .main-column > .page-heading,
+  .workspace:not(.driver-workspace) > .main-column > .metric-row,
+  .workspace:not(.driver-workspace) > .main-column > .module-launcher,
+  .workspace:not(.driver-workspace) > .main-column > .map-panel { grid-column: 1; }
+  .workspace:not(.driver-workspace) > .main-column > .map-panel { grid-row: 4; }
+}
+@media (max-width: 759px) {
+  .workspace:not(.driver-workspace) { padding: 16px 12px; }
+  .workspace:not(.driver-workspace) > .main-column { gap: 12px; }
+  .module-launcher { gap: 6px; padding: 8px; }
+  .module-launcher-label { flex-basis: 100%; }
+  .module-launcher button { min-height: 40px; padding-inline: 9px; }
+  .workspace:not(.driver-workspace) > .main-column > .map-panel .warehouse-scene { height: 62dvh; min-height: 320px; }
+  .module-dialog-close { left: auto; right: 22px; top: 14px; }
+  .app-shell.dialog-orders .orders-panel, .app-shell.dialog-fleet .fleet-panel,
+  .app-shell.dialog-inventory .inventory-panel, .app-shell.dialog-control .control-panel,
+  .app-shell.dialog-agents .agent-panel, .app-shell.dialog-activity .activity-panel,
+  .app-shell.dialog-object .object-inspector { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); padding: 14px; }
+}
+
+.theme-toggle { width: 76px; height: 38px; display: inline-flex; align-items: center; justify-content: space-between; gap: 4px; padding: 0 7px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--muted); }
+.theme-toggle:hover { border-color: var(--accent); }
+.theme-toggle-icon { width: 14px; font-size: 15px; line-height: 1; text-align: center; }
+.theme-toggle-track { width: 30px; height: 18px; position: relative; flex: none; border: 1px solid var(--line); border-radius: 10px; background: var(--background); }
+.theme-toggle-track i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); transition: transform 160ms ease; }
+.theme-toggle[aria-checked="true"] .theme-toggle-track i { transform: translateX(12px); }
+.layout-header-actions { display: flex; align-items: center; gap: 16px; }
+@media (max-width: 759px) {
+  .theme-toggle { width: 72px; height: 36px; }
+}
+
+/* Driver tablet: task card sits beside the vehicle selector; map spans the row below. */
+.driver-tablet { position: relative; display: grid; grid-template-columns: minmax(280px,.42fr) minmax(0,1fr); grid-template-rows: auto auto minmax(0,1fr) auto; align-content: start; gap: 12px 18px; }
+.driver-tablet > .tablet-header, .driver-tablet > .tablet-content { display: contents; }
+.driver-tablet .tablet-header > div:first-child { grid-column: 1; grid-row: 1; min-width: 0; align-self: start; flex-wrap: wrap; }
+.driver-tablet .tablet-live { grid-column: 2; grid-row: 1; justify-self: end; align-self: start; margin: 10px 28px 0 0; z-index: 1; }
+.driver-tablet .tablet-task { display: none !important; }
+.driver-tablet.task-dialog-open .tablet-task { position: fixed !important; z-index: 1101; inset: 50% auto auto 50%; display: flex !important; flex-direction: column; width: min(760px,calc(100vw - 32px)); max-height: min(88dvh,900px); min-width: 0; margin: 0; padding: 22px; overflow: auto; overscroll-behavior: contain; transform: translate(-50%,-50%); box-shadow: 0 24px 80px #0008; }
+.driver-tablet .tablet-task h1 { overflow-wrap: anywhere; }
+.driver-tablet > .driver-pause-notice { grid-column: 1 / -1; grid-row: 2; margin: 0; }
+.driver-tablet .tablet-map { grid-column: 1 / -1; grid-row: 3; width: 100%; min-width: 0; margin: 0; }
+.driver-tablet > .tablet-footer { grid-column: 1 / -1; grid-row: 4; margin: 0; }
+.driver-tablet .tablet-map .tablet-scene { width: 100%; }
+.driver-task-trigger { min-height: 36px; display: inline-flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-size: 12px; }
+.driver-task-trigger:hover, .driver-task-trigger[aria-expanded="true"] { border-color: var(--accent); background: color-mix(in srgb,var(--accent) 10%,var(--surface)); }
+.driver-task-trigger b { padding: 2px 5px; border-radius: 4px; background: var(--surface-raised); color: var(--accent); font: 600 11px/1.3 var(--mono); }
+.driver-task-backdrop { position: fixed; z-index: 1100; inset: 0; background: #050a10bd; backdrop-filter: blur(4px); }
+.driver-task-close { width: 34px; height: 34px; display: grid; place-items: center; margin-left: auto; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-raised); color: var(--ink); font-size: 22px; line-height: 1; }
+.driver-task-close:hover { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 759px) {
+  .driver-tablet { display: flex; flex-direction: column; gap: 12px; }
+  .driver-tablet > .tablet-header { display: flex; }
+  .driver-tablet > .tablet-content { display: flex; flex-direction: column; gap: 12px; }
+  .driver-tablet .tablet-live { margin: 0; }
+  .driver-tablet.task-dialog-open .tablet-task { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); padding: 16px; }
+  .driver-task-trigger { min-height: 40px; }
+}
 @media (max-width: 380px) {
  .workspace, .workspace:not(.driver-workspace), .layout-editor { padding: 12px; }
  .app-navigation svg { display: none; }
@@ -175,3 +299,69 @@ body { min-width: 0; }
  .layout-editor aside { position: static; max-height: none; }
  .rack-drawer { max-height: calc(100dvh - 16px); }
 }
+
+/* One shared light palette for dispatch, driver tablet, and warehouse layout. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --background: #f2f5f7;
+  --surface: #ffffff;
+  --surface-raised: #e8eef2;
+  --line: #d4dee5;
+  --ink: #172832;
+  --muted: #5d707c;
+  --accent: #148f83;
+  --route: #536fce;
+  --success: #28794c;
+  --warning: #a66a0b;
+  --error: #b5464d;
+  --green: #148f83;
+  --deep: #148f83;
+  --deep-green: #148f83;
+  --shadow: 0 16px 40px #18304220;
+}
+html[data-theme="light"], :root[data-theme="light"] body { background: var(--background); color: var(--ink); }
+:root[data-theme="light"] .app-shell, :root[data-theme="light"] .topbar,
+:root[data-theme="light"] .workspace, :root[data-theme="light"] .driver-tablet { background: var(--background); color: var(--ink); }
+:root[data-theme="light"] .app-navigation { background: #e9eff3; border-color: var(--line); }
+:root[data-theme="light"] .app-navigation .active { color: #08766c; background: #148f8312; border-color: #148f8330; }
+:root[data-theme="light"] .app-navigation button:hover, :root[data-theme="light"] .app-navigation a:hover { background: #dce7ec; color: var(--ink); }
+:root[data-theme="light"] .panel, :root[data-theme="light"] .metric-card,
+:root[data-theme="light"] .control-panel, :root[data-theme="light"] .agent-panel,
+:root[data-theme="light"] .activity-panel, :root[data-theme="light"] .orders-panel,
+:root[data-theme="light"] .fleet-panel, :root[data-theme="light"] .inventory-panel,
+:root[data-theme="light"] .tablet-task, :root[data-theme="light"] .tablet-map { background-color: var(--surface); border-color: var(--line); color: var(--ink); }
+:root[data-theme="light"] .topbar, :root[data-theme="light"] .tablet-header,
+:root[data-theme="light"] .tablet-footer, :root[data-theme="light"] .metric-card + .metric-card,
+:root[data-theme="light"] .order-row, :root[data-theme="light"] .fleet-row,
+:root[data-theme="light"] .event-row, :root[data-theme="light"] .map-footer { border-color: var(--line); }
+:root[data-theme="light"] .scene-container { background: #f7fafb; }
+:root[data-theme="light"] .scene-toolbar { background: #eaf0f3; }
+:root[data-theme="light"] .scene-camera button { background: #e4ebef; color: var(--ink); }
+:root[data-theme="light"] .warehouse-scene > g > rect:first-child { fill: #f8fafb; stroke: #aebdc6; }
+:root[data-theme="light"] .warehouse-scene pattern path { stroke: #d9e2e7; }
+:root[data-theme="light"] .scene-axis { fill: #617985; }
+:root[data-theme="light"] .rack-deck { fill: #dce7eb; }
+:root[data-theme="light"] .rack-frame { stroke: #8299a4; }
+:root[data-theme="light"] .scene-rack-label { fill: #29424e; stroke: #f8fafb; }
+:root[data-theme="light"] .scene-robot-label { stroke: #f8fafb; }
+:root[data-theme="light"] .scene-tooltip { background: #fffffffa; border-color: #c5d4dc; color: var(--ink); }
+:root[data-theme="light"] .scene-tooltip p, :root[data-theme="light"] .driver-instruction { color: #405864; }
+:root[data-theme="light"] .tablet-task .task-product, :root[data-theme="light"] .tablet-task .task-steps b,
+:root[data-theme="light"] .tablet-task .task-route { background-color: #f0f5f7; border-color: var(--line); color: var(--ink); }
+:root[data-theme="light"] .tablet-task .task-steps .current b { background: var(--accent); color: white; }
+:root[data-theme="light"] .layout-editor { color: var(--ink); }
+:root[data-theme="light"] .layout-editor aside, :root[data-theme="light"] .layout-editor .layout-message,
+:root[data-theme="light"] .layout-editor .layout-grid-scroll { background: var(--surface); border-color: var(--line); }
+:root[data-theme="light"] .layout-editor .layout-cell { background: #f2f6f8; border-color: #d3dfe5; color: var(--ink); }
+:root[data-theme="light"] .layout-editor .rack { background: #d5e1e6; color: #24414d; }
+:root[data-theme="light"] .layout-editor .wall { background: #8499a4; color: #fff; }
+:root[data-theme="light"] .layout-editor .pickup { background: #f3d995; color: #523c0e; }
+:root[data-theme="light"] .layout-editor .shipping { background: #b6e0d3; color: #174b3c; }
+:root[data-theme="light"] .layout-editor .robot { background: #c4d3f4; color: #263f78; }
+:root[data-theme="light"] .layout-editor button, :root[data-theme="light"] .layout-editor input,
+:root[data-theme="light"] .layout-editor select { background: #fff; color: var(--ink); border-color: var(--line); }
+:root[data-theme="light"] .layout-editor .layout-tools .selected { background: #d8f0ec; color: #08766c; border-color: #83c8bf; }
+:root[data-theme="light"] .simulation-badge { color: var(--muted); }
+:root[data-theme="light"] .header-start { color: #fff; }
+:root[data-theme="light"] .module-dialog-close { background: #fff; color: var(--ink); border-color: var(--line); }
+:root[data-theme="light"] .rack-drawer { background: var(--surface); color: var(--ink); }
