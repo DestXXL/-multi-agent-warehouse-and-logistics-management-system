@@ -1,4 +1,4 @@
-import { Navigation } from './ControlCenter'
+import { Navigation, ThemeToggle } from './ControlCenter'
 import { useEffect, useRef, useState } from 'react'
 import './layout.css'
 import { meterInputValue, millimetersFromMeters } from './units'
@@ -55,7 +55,7 @@ export default function LayoutEditor() {
   }
   const capacity = layout.cells.filter(c => c.kind === 'rack').reduce((s,c) => s+c.levels*(c.positions_per_level || 2),0)
   return <div className="app-shell"><Navigation screen="layout" onChange={screen => { window.location.search = `?view=${screen}` }} /><main className="layout-editor">
-    <header><div><small>ПОДГОТОВКА СКЛАДА</small><h1>Конструктор склада</h1><p>Разместите объекты кликом. Свободные клетки – проходы; нажатие на стеллаж открывает его настройки.</p></div><a href="?view=control">← Диспетчерская</a></header>
+    <header><div><small>ПОДГОТОВКА СКЛАДА</small><h1>Конструктор склада</h1><p>Разместите объекты кликом. Свободные клетки – проходы; нажатие на стеллаж открывает его настройки.</p></div><div className="layout-header-actions"><ThemeToggle /><a href="?view=control">← Диспетчерская</a></div></header>
     <div className="layout-columns"><aside><details ref={settings} className="editor-settings"><summary>Настройки склада и объектов</summary>
       <h2>Размеры в клетках</h2>
       {(['width', 'height'] as const).map((axis) => <label key={axis}>{axis === 'width' ? 'Ширина' : 'Высота'}<input type="number" min="4" max={axis === 'width' ? 40 : 30} value={layout[axis]} onChange={e => { const n = Number(e.target.value); if (Number.isInteger(n) && n >= 4 && n <= (axis === 'width' ? 40 : 30)) setLayout({ ...layout, [axis]: n }) }} /></label>)}

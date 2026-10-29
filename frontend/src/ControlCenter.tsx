@@ -1,6 +1,18 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Rack, Robot, Order } from './App'
 import { formatDimensions, formatSquareMillimeters, occupancyPercent } from './units'
+
+export function ThemeToggle() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => localStorage.getItem('warehouse-theme') === 'light' ? 'light' : 'dark')
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('warehouse-theme', theme)
+  }, [theme])
+  const isLight = theme === 'light'
+  return <button className="theme-toggle" type="button" role="switch" aria-checked={isLight} aria-label={isLight ? 'Светлая тема' : 'Тёмная тема'} onClick={() => setTheme(isLight ? 'dark' : 'light')}>
+    <span className="theme-toggle-icon" aria-hidden="true">☾</span><span className="theme-toggle-track"><i /></span><span className="theme-toggle-icon" aria-hidden="true">☼</span>
+  </button>
+}
 
 export function Navigation({ screen, onChange }: { screen: 'control' | 'driver' | 'layout'; onChange: (screen: 'control' | 'driver') => void }) {
   return <nav className="app-navigation" aria-label="Основная навигация">
@@ -16,14 +28,14 @@ function NavIcon({ kind }: { kind: 'map' | 'tablet' | 'layout' }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{kind === 'map' ? <><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4M7 8h4v5H7zM15 8h2M15 12h2" /></> : kind === 'tablet' ? <><rect x="5" y="2" width="14" height="20" rx="2" /><path d="M9 6h6M11 18h2" /></> : <><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></>}</svg>
 }
 
-export function ObjectInspector({ rack, robot, order, phase, status, onClose, onRackDetails }: { rack?: Rack; robot?: Robot; order?: Order; phase?: string; status?: string; onClose: () => void; onRackDetails: () => void }) {
+export function ObjectInspector({ rack, robot, order, phase, status, isOpen, onClose, onRackDetails }: { rack?: Rack; robot?: Robot; order?: Order; phase?: string; status?: string; isOpen: boolean; onClose: () => void; onRackDetails: () => void }) {
   const panel = useRef<HTMLElement>(null)
   const selection = rack?.id ?? robot?.id ?? order?.id
   useEffect(() => {
     if (selection) panel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [selection])
-  return <section ref={panel} className={`panel object-inspector ${(rack || robot || order) ? 'has-selection' : ''}`} aria-label="Выбранный объект">
-    <div className="inspector-heading"><div><span className="inspector-type">{rack ? 'Стеллаж' : robot ? 'Погрузчик' : order ? 'Заказ' : 'Контекст объекта'}</span><h2>{rack?.id ?? robot?.id ?? order?.id ?? 'Выберите объект'}</h2></div>{(rack || robot || order) && <button className="icon-button" aria-label="Снять выбор объекта" onClick={onClose}>×</button>}</div>
+  return <section ref={panel} className={`panel object-inspector ${(rack || robot || order) ? 'has-selection' : ''}`} role={isOpen && selection ? 'dialog' : undefined} aria-modal={isOpen && selection ? true : undefined} aria-hidden={!isOpen} aria-label="Выбранный объект">
+    <div className="inspector-heading"><div><span className="inspector-type">{rack ? 'Стеллаж' : robot ? 'Погрузчик' : order ? 'Заказ' : 'Контекст объекта'}</span><h2>{rack?.id ?? robot?.id ?? order?.id ?? 'Выберите объект'}</h2></div>{(rack || robot || order) && <button className="icon-button" aria-label="Закрыть окно объекта" onClick={onClose}>×</button>}</div>
     {rack ? <>
       <div className="rack-elevation" role="img" aria-label={`Фасад стеллажа: ${rack.levels} ярусов, ${formatDimensions(rack.width_mm, rack.depth_mm, rack.height_mm)}`}>
         <svg viewBox={`0 0 ${rack.width_mm + 120} ${rack.height_mm + 120}`} preserveAspectRatio="xMidYMid meet">
