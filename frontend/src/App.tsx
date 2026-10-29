@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { formatCoordinates, formatDimensions, formatMillimeters, formatPercent, formatSquareMillimeters, occupancyPercent } from './units'
+import WarehouseScene from './WarehouseScene'
+import { Navigation, ObjectInspector } from './ControlCenter'
+import { formatCoordinates, formatDimensions, formatPercent, formatSquareMillimeters, occupancyPercent } from './units'
 
-type Rack = { id: string; rack_type: string; rack_type_title: string; purpose: string; position: [number, number]; service_point: [number, number] | null; width_mm: number; depth_mm: number; height_mm: number; levels: number; positions_per_level: number; location_count: number; occupied_locations: number; free_locations: number; capacity_percent: number; package_count: number; free_surface_mm2: number; levels_occupancy: { level: number; occupied: number; total: number; packages: number; free_surface_mm2: number }[] }
+export type Rack = { id: string; rack_type: string; rack_type_title: string; purpose: string; position: [number, number]; service_point: [number, number] | null; width_mm: number; depth_mm: number; height_mm: number; levels: number; positions_per_level: number; location_count: number; occupied_locations: number; free_locations: number; capacity_percent: number; package_count: number; free_surface_mm2: number; levels_occupancy: { level: number; occupied: number; total: number; packages: number; free_surface_mm2: number }[] }
 type PackagePlacement = { x_mm: number; y_mm: number; length_mm: number; width_mm: number; height_mm: number; rotated: boolean }
 type StoredItem = { id: string; name: string; quantity: number; length_mm: number; width_mm: number; height_mm: number; unit_placements: PackagePlacement[] }
-type StorageLocation = { id: string; rack_id: string; level: number; position: number; address: string; enabled: boolean; width_mm: number; depth_mm: number; max_height_mm: number; x_mm: number; y_mm: number; occupied: boolean; package_count: number; free_surface_mm2: number; item: null | { id: string; name: string; quantity: number; reserved_quantity: number; available_quantity: number; length_mm: number; width_mm: number; height_mm: number; rotated: boolean; placement_x_mm: number; placement_y_mm: number; unit_placements: PackagePlacement[] }; items: StoredItem[] }
+export type StorageLocation = { id: string; rack_id: string; level: number; position: number; address: string; enabled: boolean; width_mm: number; depth_mm: number; max_height_mm: number; x_mm: number; y_mm: number; occupied: boolean; package_count: number; free_surface_mm2: number; item: null | { id: string; name: string; quantity: number; reserved_quantity: number; available_quantity: number; length_mm: number; width_mm: number; height_mm: number; rotated: boolean; placement_x_mm: number; placement_y_mm: number; unit_placements: PackagePlacement[] }; items: StoredItem[] }
 
-type Robot = {
+export type Robot = {
   id: string
   position: [number, number]
   route: [number, number][]
@@ -21,7 +23,7 @@ type Robot = {
   route_version: number
 }
 
-type Order = {
+export type Order = {
   id: string
   item: string
   pickup: [number, number]
@@ -67,7 +69,6 @@ type EventItem = {
 type ToastItem = { id: string; source: string; message: string }
 type OrderStatusFilter = 'all' | Order['status']
 type PhysicalScale = { cellStepM: number; forkliftLengthM: number; forkliftWidthM: number }
-type AisleLabel = { widthM: number; gapCells: number; fitsForklift: boolean }
 
 const DEFAULT_PHYSICAL_SCALE: PhysicalScale = { cellStepM: 3, forkliftLengthM: 2.4, forkliftWidthM: 1.1 }
 
@@ -124,89 +125,8 @@ const orderNames: Record<Order['status'], string> = {
   cancelled: 'Отменён',
 }
 
-const robotNames: Record<Robot['status'], string> = {
-  idle: 'Свободен',
-  moving: 'В движении',
-  waiting: 'Ожидает',
-  stopped: 'Остановлен',
-}
-
 function key([x, y]: [number, number]) {
   return `${x},${y}`
-}
-
-function findAisleLabels(warehouse: State['warehouse'] | undefined, cellStepM: number, forkliftWidthM: number) {
-  const labels = new Map<string, AisleLabel>()
-  if (!warehouse?.racks?.length) return labels
-  const blocked = new Set(warehouse.obstacles.map(key))
-
-  const addGap = (first: Rack, second: Rack, axis: 'x' | 'y') => {
-    const firstCoordinate = first.position[axis === 'x' ? 0 : 1]
-    const secondCoordinate = second.position[axis === 'x' ? 0 : 1]
-    const gapCells = secondCoordinate - firstCoordinate
-    if (gapCells <= 1) return
-    for (let coordinate = firstCoordinate + 1; coordinate < secondCoordinate; coordinate += 1) {
-      const point: [number, number] = axis === 'x' ? [coordinate, first.position[1]] : [first.position[0], coordinate]
-      if (blocked.has(key(point))) return
-    }
-    const center: [number, number] = axis === 'x'
-      ? [Math.floor((firstCoordinate + secondCoordinate) / 2), first.position[1]]
-      : [first.position[0], Math.floor((firstCoordinate + secondCoordinate) / 2)]
-    const firstSpanM = (axis === 'x' ? first.width_mm : first.depth_mm) / 1000
-    const secondSpanM = (axis === 'x' ? second.width_mm : second.depth_mm) / 1000
-    const widthM = Math.max(0, gapCells * cellStepM - (firstSpanM + secondSpanM) / 2)
-    const label = { widthM, gapCells: gapCells - 1, fitsForklift: widthM >= forkliftWidthM }
-    const existing = labels.get(key(center))
-    if (!existing || label.widthM < existing.widthM) labels.set(key(center), label)
-  }
-
-  const rows = new Map<number, Rack[]>()
-  const columns = new Map<number, Rack[]>()
-  warehouse.racks.forEach(rack => {
-    const row = rows.get(rack.position[1]) ?? []
-    row.push(rack)
-    rows.set(rack.position[1], row)
-    const column = columns.get(rack.position[0]) ?? []
-    column.push(rack)
-    columns.set(rack.position[0], column)
-  })
-  rows.forEach(racks => {
-    const sorted = racks.slice().sort((a, b) => a.position[0] - b.position[0])
-    for (let index = 1; index < sorted.length; index += 1) addGap(sorted[index - 1], sorted[index], 'x')
-  })
-  columns.forEach(racks => {
-    const sorted = racks.slice().sort((a, b) => a.position[1] - b.position[1])
-    for (let index = 1; index < sorted.length; index += 1) addGap(sorted[index - 1], sorted[index], 'y')
-  })
-  const compacted = new Map<string, AisleLabel>()
-  const pending = new Set(labels.keys())
-  while (pending.size) {
-    const start = pending.values().next().value as string
-    const reference = labels.get(start)!
-    const group: string[] = []
-    const queue = [start]
-    pending.delete(start)
-    while (queue.length) {
-      const current = queue.shift()!
-      group.push(current)
-      const [x, y] = current.split(',').map(Number)
-      for (const neighbor of [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`]) {
-        const candidate = labels.get(neighbor)
-        if (pending.has(neighbor) && candidate && candidate.fitsForklift === reference.fitsForklift && Math.abs(candidate.widthM - reference.widthM) < 0.25) {
-          pending.delete(neighbor)
-          queue.push(neighbor)
-        }
-      }
-    }
-    group.sort((first, second) => {
-      const [firstX, firstY] = first.split(',').map(Number)
-      const [secondX, secondY] = second.split(',').map(Number)
-      return firstY - secondY || firstX - secondX
-    })
-    const center = group[Math.floor(group.length / 2)]
-    compacted.set(center, labels.get(center)!)
-  }
-  return compacted
 }
 
 function App() {
@@ -214,8 +134,12 @@ function App() {
   const [connection, setConnection] = useState<'online' | 'offline'>('offline')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [rackTip, setRackTip] = useState<{ rack: Rack; anchor: HTMLElement; pinned: boolean } | null>(null)
   const [selectedRackId, setSelectedRackId] = useState<string | null>(null)
+  const [detailRackId, setDetailRackId] = useState<string | null>(null)
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
+  const [panelsVisible, setPanelsVisible] = useState(true)
+  const [operationsVisible, setOperationsVisible] = useState(true)
+  const [eventSource, setEventSource] = useState('all')
   const [orderQuery, setOrderQuery] = useState('')
   const [orderStatusFilter, setOrderStatusFilter] = useState<OrderStatusFilter>('all')
   const [highlightedRobotId, setHighlightedRobotId] = useState<string | null>(null)
@@ -227,7 +151,6 @@ function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([])
   const seenEventIds = useRef<Set<string> | null>(null)
   const toastTimers = useRef<Set<number>>(new Set())
-  const [, setTipPositionVersion] = useState(0)
   const [screen, setScreen] = useState<'control' | 'driver'>(() => new URLSearchParams(window.location.search).get('view') === 'driver' ? 'driver' : 'control')
   const [driverId, setDriverId] = useState(() => new URLSearchParams(window.location.search).get('vehicle') || 'R-01')
   useEffect(() => {
@@ -257,6 +180,7 @@ function App() {
         }
       }
       socket.onclose = () => {
+        if (disposed) return
         setConnection('offline')
         retryTimer = window.setTimeout(connect, 1800)
       }
@@ -270,7 +194,7 @@ function App() {
       })
       .then(setState)
       .catch(() => setError('Backend пока не запущен. Запустите сервер по инструкции в README.'))
-    connect()
+    retryTimer = window.setTimeout(connect, 0)
 
     return () => {
       disposed = true
@@ -304,26 +228,6 @@ function App() {
       toastTimers.current.add(timer)
     })
   }, [state?.events])
-  useEffect(() => {
-    if (!rackTip) return
-    const reposition = () => setTipPositionVersion(value => value + 1)
-    const dismiss = (event: PointerEvent) => {
-      if (!rackTip.anchor.contains(event.target as Node)) setRackTip(null)
-    }
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setRackTip(null) }
-    window.addEventListener('scroll', reposition, true)
-    window.addEventListener('resize', reposition)
-    document.addEventListener('pointerdown', dismiss)
-    document.addEventListener('keydown', escape)
-    return () => {
-      window.removeEventListener('scroll', reposition, true)
-      window.removeEventListener('resize', reposition)
-      document.removeEventListener('pointerdown', dismiss)
-      document.removeEventListener('keydown', escape)
-    }
-  }, [rackTip])
-
-  const openRackTip = (rack: Rack, anchor: HTMLElement, pinned = false) => setRackTip({ rack, anchor, pinned })
   const robots = warehouse?.robots ?? []
   const orders = warehouse?.orders ?? []
   const inventory = warehouse?.inventory ?? []
@@ -332,8 +236,6 @@ function App() {
   const pending = orders.filter((order) => !['completed', 'cancelled'].includes(order.status)).length
   const driverRobot = robots.find((robot) => robot.id === driverId) ?? robots[0]
   const driverOrder = orders.find((order) => order.id === driverRobot?.order_id)
-  const driverTarget = driverOrder ? (['to_pickup', 'confirm_pickup', 'offered'].includes(driverRobot?.driver_phase || '') ? driverOrder.pickup : driverOrder.dropoff) : driverRobot?.driver_phase === 'returning' ? driverRobot.home : null
-  const aisleLabels = useMemo(() => findAisleLabels(warehouse, physicalScale.cellStepM, physicalScale.forkliftWidthM), [warehouse, physicalScale.cellStepM, physicalScale.forkliftWidthM])
   const filteredOrders = useMemo(() => {
     const query = orderQuery.trim().toLocaleLowerCase('ru')
     return orders.filter(order => {
@@ -346,7 +248,10 @@ function App() {
 
   function showOrderRoute(robotId: string) {
     setHighlightedRobotId(robotId)
-    window.requestAnimationFrame(() => document.getElementById('warehouse-map-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+    setSelectedRackId(null)
+    setSelectedOrderId(null)
+    setPanelsVisible(true)
+    window.requestAnimationFrame(() => document.getElementById('warehouse-map-panel')?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' }))
   }
 
   function updatePhysicalScale(field: keyof PhysicalScale, value: string) {
@@ -362,24 +267,6 @@ function App() {
     setPhysicalScale(DEFAULT_PHYSICAL_SCALE)
     setPhysicalScaleDraft({ cellStepM: String(DEFAULT_PHYSICAL_SCALE.cellStepM), forkliftLengthM: String(DEFAULT_PHYSICAL_SCALE.forkliftLengthM), forkliftWidthM: String(DEFAULT_PHYSICAL_SCALE.forkliftWidthM) })
   }
-
-  const cellMap = useMemo(() => {
-    const cells = new Map<string, { obstacle?: boolean; rack?: Rack; closed?: boolean; route?: boolean; pickup?: boolean; shipping?: boolean; robot?: Robot; aisle?: AisleLabel }>()
-    warehouse?.obstacles.forEach((point) => cells.set(key(point), { obstacle: true }))
-    warehouse?.racks?.forEach((rack) => cells.set(key(rack.position), { ...cells.get(key(rack.position)), rack }))
-    warehouse?.closed_cells.forEach((point) => cells.set(key(point), { ...cells.get(key(point)), closed: true }))
-    warehouse?.pickup_points.forEach((point) => cells.set(key(point), { ...cells.get(key(point)), pickup: true }))
-    warehouse?.shipping_points.forEach((point) => cells.set(key(point), { ...cells.get(key(point)), shipping: true }))
-    aisleLabels.forEach((aisle, pointKey) => cells.set(pointKey, { ...cells.get(pointKey), aisle }))
-    robots.filter((robot) => screen === 'control'
-      ? (!highlightedRobotId || robot.id === highlightedRobotId)
-      : robot.id === driverRobot?.id).forEach((robot) => robot.route.forEach((point) => {
-      const cellKey = key(point)
-      cells.set(cellKey, { ...cells.get(cellKey), route: true })
-    }))
-    robots.forEach((robot) => cells.set(key(robot.position), { ...cells.get(key(robot.position)), robot }))
-    return cells
-  }, [warehouse, robots, screen, driverRobot, highlightedRobotId, aisleLabels])
 
   async function command(path: string, body?: unknown) {
     setBusy(true)
@@ -402,7 +289,7 @@ function App() {
     return (
       <main className="connection-screen">
         <div className="brand-mark">W</div>
-        <p className="eyebrow">WAREHOUSE CONTROL ROOM</p>
+        <p className="eyebrow">УПРАВЛЕНИЕ СКЛАДОМ</p>
         <h1>Подключаем склад</h1>
         <p className="muted">{error || 'Получаем состояние симуляции…'}</p>
         <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">Открыть API сервера ↗</a>
@@ -410,96 +297,81 @@ function App() {
     )
   }
 
-  const cells = Array.from({ length: warehouse!.width * warehouse!.height }, (_, index) => {
-    const x = index % warehouse!.width
-    const y = Math.floor(index / warehouse!.width)
-    const cell = cellMap.get(`${x},${y}`)
-    return (
-      <div title={cell?.aisle ? `Расчётный проезд: ${cell.aisle.widthM.toFixed(1)} м; свободно ${cell.aisle.gapCells} клеток. Демо-масштаб.` : cell?.rack ? undefined : `Ячейка ${x}, ${y}`} className={`map-cell ${screen === 'driver' && driverTarget && key(driverTarget) === `${x},${y}` ? 'target-cell' : ''} ${cell?.obstacle ? 'shelf-cell' : ''} ${cell?.closed ? 'closed-cell' : ''} ${cell?.route ? 'route-cell' : ''} ${cell?.pickup ? 'pickup-cell' : ''} ${cell?.shipping ? 'shipping-cell' : ''}`} key={`${x}-${y}`}>
-        {screen === 'driver' && driverTarget && key(driverTarget) === `${x},${y}` && !cell?.robot && <span className="destination-pin">ЦЕЛЬ</span>}
-        {cell?.aisle && <span className={`aisle-dimension-label ${cell.aisle.fitsForklift ? '' : 'too-narrow'}`}>{cell.aisle.widthM.toFixed(1)} м</span>}
-        {cell?.rack && <button type="button" className="shelf" style={{ width: `${Math.min(240, Math.max(30, cell.rack.width_mm / 1000 / physicalScale.cellStepM * 100))}%`, height: `${Math.min(240, Math.max(30, cell.rack.depth_mm / 1000 / physicalScale.cellStepM * 100))}%` }} aria-label={`Стеллаж ${cell.rack.id}, ${formatMillimeters(cell.rack.width_mm)} на ${formatMillimeters(cell.rack.depth_mm)} м, ${cell.rack.levels} ярусов`} aria-haspopup="dialog" aria-describedby={rackTip?.rack.id === cell.rack.id ? 'rack-tooltip' : undefined} onMouseEnter={event => openRackTip(cell.rack!, event.currentTarget)} onMouseLeave={() => setRackTip(current => current?.pinned ? current : null)} onFocus={event => openRackTip(cell.rack!, event.currentTarget)} onBlur={() => setRackTip(current => current?.pinned ? current : null)} onClick={() => { setRackTip(null); setSelectedRackId(cell.rack!.id) }}><span>▤</span><small className="shelf-size">{(cell.rack.width_mm / 1000).toFixed(1)} × {(cell.rack.depth_mm / 1000).toFixed(1)} м</small></button>}
-        {cell?.obstacle && !cell.rack && <div className="shelf"><span>▤</span><small>RACK</small></div>}
-        {cell?.closed && <span className="closed-marker">!</span>}
-        {cell?.pickup && !cell.robot && <span className="zone-pin pickup-pin">P</span>}
-        {cell?.shipping && !cell.robot && <span className="zone-pin shipping-pin">OUT</span>}
-        {cell?.robot && (
-          <div className={`robot-token ${screen === 'control' && highlightedRobotId === cell.robot.id ? 'is-highlighted' : ''}`}>
-            <div className={`forklift-footprint ${cell.robot.status} ${screen === 'driver' && cell.robot.id !== driverRobot?.id ? 'other-vehicle' : ''} ${cell.robot.route[0] && cell.robot.route[0][1] === cell.robot.position[1] ? 'horizontal' : ''}`} style={{ width: `${Math.min(220, Math.max(42, physicalScale.forkliftWidthM / physicalScale.cellStepM * 100))}%`, height: `${Math.min(220, Math.max(54, physicalScale.forkliftLengthM / physicalScale.cellStepM * 100))}%` }} title={`${cell.robot.id} · ${robotNames[cell.robot.status]} · габарит ${physicalScale.forkliftLengthM.toFixed(1)} × ${physicalScale.forkliftWidthM.toFixed(1)} м (демо)`}>
-              <span className="robot-glyph">▰</span><b>{screen === 'driver' && cell.robot.id === driverRobot?.id ? 'Я' : cell.robot.id.slice(-2)}</b>
-              {cell.robot.carrying_item && <i className="cargo-dot" />}
-            </div>
-          </div>
-        )}
-      </div>
-    )
-  })
-
-  const activeRack = rackTip && warehouse?.racks?.find(rack => rack.id === rackTip.rack.id)
   const selectedRackData = selectedRackId ? warehouse?.racks?.find(rack => rack.id === selectedRackId) : undefined
-  const anchorRect = rackTip?.anchor?.getBoundingClientRect()
-  const tipLeft = anchorRect ? Math.max(8, Math.min(anchorRect.left + anchorRect.width / 2 - 156, window.innerWidth - 328)) : 0
-  const tipTop = anchorRect ? (anchorRect.bottom + 280 <= window.innerHeight ? anchorRect.bottom + 8 : Math.max(8, anchorRect.top - 280)) : 0
-
+  const detailRackData = warehouse?.racks.find(rack => rack.id === detailRackId)
+  const selectedRobot = robots.find(robot => robot.id === highlightedRobotId)
+  const selectedOrder = orders.find(order => order.id === selectedOrderId)
+  const selectRack = (id: string) => { setSelectedRackId(id); setHighlightedRobotId(null); setSelectedOrderId(null); setPanelsVisible(true) }
+  const selectRobot = (id: string) => { setHighlightedRobotId(id); setSelectedRackId(null); setSelectedOrderId(null); setPanelsVisible(true) }
+  const visibleEvents = state.events.filter(event => eventSource === 'all' || event.source === eventSource)
   return (
-    <div className="app-shell">
-      {activeRack && createPortal(<RackPreview rack={activeRack} style={{ left: tipLeft, top: tipTop }} />, document.body)}
-      {selectedRackData && createPortal(<RackDetails rack={selectedRackData} locations={warehouse!.storage_locations.filter(location => location.rack_id === selectedRackData.id)} onClose={() => setSelectedRackId(null)} />, document.body)}
+    <div className={`app-shell ${panelsVisible ? '' : 'panels-hidden'} ${operationsVisible ? '' : 'operations-hidden'}`}>
+      <Navigation screen={screen} onChange={setScreen} />
+      {detailRackData && createPortal(<RackDetails key={detailRackData.id} rack={detailRackData} locations={warehouse!.storage_locations.filter(location => location.rack_id === detailRackData.id)} onClose={() => setDetailRackId(null)} />, document.body)}
       {toasts.length > 0 && <div className="toast-stack" role="status" aria-live="polite">{toasts.map(toast => <div className="event-toast" key={toast.id}><span className={`toast-source ${toast.source}`} /><p>{toast.message}</p><button type="button" aria-label="Закрыть уведомление" onClick={() => setToasts(current => current.filter(item => item.id !== toast.id))}>×</button></div>)}</div>}
       <header className="topbar">
-        <div className="brand-lockup"><div className="brand-mark">W</div><div><strong>WAREHOUSE</strong><span>CONTROL ROOM</span></div></div>
-        <div className="topbar-center"><span className={`connection-dot ${connection}`} />{connection === 'online' ? 'СВЯЗЬ С СИМУЛЯЦИЕЙ УСТАНОВЛЕНА' : 'ПОДКЛЮЧЕНИЕ К СЕРВЕРУ…'}</div>
-        <div className="topbar-right"><button className="screen-switch" onClick={() => setScreen(screen === 'control' ? 'driver' : 'control')}>{screen === 'control' ? '▣ Планшет водителя' : '▦ Центр управления'}</button><span className="live-clock">SIM · {String(state.tick).padStart(4, '0')}</span><span className="avatar">{screen === 'control' ? 'ОП' : 'В-01'}</span></div>
+        <div className="brand-lockup"><div className="brand-mark">W</div><div><strong>Центр управления складом</strong><span>Управление складом и логистикой</span></div></div>
+        <div className="topbar-center"><span className={`connection-dot ${connection}`} />{connection === 'online' ? 'На связи' : 'Нет связи'}</div>
+        <div className="topbar-right"><span className={`simulation-badge ${state.running ? 'is-running' : ''}`}><span />{state.running ? 'Симуляция активна' : 'На паузе'}</span><button className="header-start" disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Ⅱ Пауза' : '▶ Запустить'}</button><span className="live-clock">Такт · {String(state.tick).padStart(4, '0')}</span><span className="avatar">{screen === 'control' ? 'ОП' : 'В-01'}</span></div>
       </header>
 
       <main className={`workspace ${screen === 'driver' ? 'driver-workspace' : ''}`}>
         {error && <div className="workflow-error" role="alert">{error}</div>}
         {connection === 'offline' && <div className="workflow-error" role="status">Связь потеряна. Показано последнее известное состояние; команды недоступны.</div>}
         {screen === 'driver' ? (
-          driverRobot ? <DriverTablet robot={driverRobot} robots={robots} order={driverOrder} width={warehouse!.width} cells={cells} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
+          driverRobot ? <DriverTablet robot={driverRobot} robots={robots} order={driverOrder} cells={<WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={driverRobot.id} target={driverOrder ? (['offered', 'to_pickup', 'confirm_pickup'].includes(driverRobot.driver_phase) ? driverOrder.pickup : driverOrder.dropoff) : driverRobot.driver_phase === 'returning' ? driverRobot.home : null} onRack={id => setDetailRackId(id)} onRobot={setDriverId} />} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
         ) : <>
         <section className="main-column">
           <div className="page-heading">
-            <div><p className="eyebrow">ЦЕНТР УПРАВЛЕНИЯ / СМЕНА 01</p><h1>Операционная</h1><p className="muted">Мониторинг и координация складских операций</p></div>
-            <div className={`simulation-badge ${state.running ? 'is-running' : ''}`}><span />{state.running ? 'СИМУЛЯЦИЯ АКТИВНА' : 'СИМУЛЯЦИЯ НА ПАУЗЕ'}</div>
+            <div><h1>Диспетчерская</h1><p className="muted">Склад {warehouse!.width} × {warehouse!.height} клеток · {warehouse!.racks.length} стеллажей · схема ≈ { (warehouse!.width * physicalScale.cellStepM).toLocaleString("ru") } × { (warehouse!.height * physicalScale.cellStepM).toLocaleString("ru") } м</p></div>
+            <div className="workspace-actions"><button type="button" aria-expanded={operationsVisible} onClick={() => setOperationsVisible(value => !value)}>{operationsVisible ? 'Скрыть операции' : 'Операции'}</button><button type="button" aria-expanded={panelsVisible} onClick={() => setPanelsVisible(value => !value)}>{panelsVisible ? 'Скрыть панель' : 'Панель объектов'}</button></div>
           </div>
 
           <div className="metric-row">
             <Metric label="АКТИВНАЯ ТЕХНИКА" value={`${activeRobots} / ${robots.length}`} accent="lime" icon="✣" />
-            <Metric label="ЗАКАЗЫ В РАБОТЕ" value={String(pending).padStart(2, '0')} accent="blue" icon="↗" />
+            <Metric label="НЕЗАВЕРШЁННЫЕ ЗАКАЗЫ" value={String(pending).padStart(2, '0')} accent="blue" icon="↗" />
             <Metric label="ВЫПОЛНЕНО В СЦЕНАРИИ" value={String(completed).padStart(2, '0')} accent="orange" icon="✓" />
             <Metric label="ТАКТ СИМУЛЯЦИИ" value={String(state.tick).padStart(4, '0')} accent="violet" icon="◷" />
           </div>
 
           <section className="panel map-panel" id="warehouse-map-panel">
             <div className="panel-heading map-heading">
-              <div><p className="eyebrow">LIVE FLOOR PLAN</p><h2>Карта склада <span className="soft-tag">{warehouse!.width} × {warehouse!.height}</span></h2></div>
-              <div className="map-actions"><span className="map-live"><i /> LIVE</span><button className="icon-button" title="Обновление в реальном времени">⌁</button></div>
+              <div><h2>Карта склада <span className="soft-tag">{warehouse!.width} × {warehouse!.height} клеток</span></h2></div>
+              <div className="map-actions"><span className="map-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
             </div>
-            <div className="map-dimension-controls"><label title="Расстояние между центрами соседних клеток">Шаг сетки <span><input type="number" min="0.5" max="20" step="0.1" value={physicalScaleDraft.cellStepM} onChange={event => updatePhysicalScale('cellStepM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, cellStepM: String(physicalScale.cellStepM) }))} /> м</span></label><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Примерный шаг сетки · ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div>
-            <div className="map-legend"><span><i className="legend-dot robot-dot" /> Погрузчик в масштабе</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box pickup-dot" /> Комплектация</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> {highlightedRobotId ? `Маршрут ${highlightedRobotId}` : 'Маршруты'}</span><span><i className="legend-box aisle-dot" /> Проезд · м</span><span className="aisle-warning-legend">Красный — уже погрузчика</span>{highlightedRobotId && <button className="clear-route-button" type="button" onClick={() => setHighlightedRobotId(null)}>Показать все</button>}</div>
-            <div className="map-scroll"><div className="warehouse-map" style={{ gridTemplateColumns: `repeat(${warehouse!.width}, minmax(42px, 1fr))` }}>{cells}</div></div>
-            <div className="map-footer"><span><i className="footer-pulse" /> Карта обновляется автоматически</span><span>ОЦЕНОЧНЫЕ ГАБАРИТЫ · СИМУЛЯЦИЯ ДВИГАЕТСЯ ПО ЦЕНТРАМ КЛЕТОК И НЕ ПРОВЕРЯЕТ КОЛЛИЗИИ КОРПУСА</span></div>
+            <details className="scale-settings"><summary>Масштаб и габариты техники</summary><div className="map-dimension-controls"><label title="Расстояние между центрами соседних клеток">Шаг сетки <span><input type="number" min="0.5" max="20" step="0.1" value={physicalScaleDraft.cellStepM} onChange={event => updatePhysicalScale('cellStepM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, cellStepM: String(physicalScale.cellStepM) }))} /> м</span></label><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Примерный шаг сетки · ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div></details>
+            <div className="map-legend"><span><i className="legend-dot robot-dot" /> Погрузчик</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box pickup-dot" /> Комплектация</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> {highlightedRobotId ? `Маршрут ${highlightedRobotId}` : 'Маршрут по выбору'}</span><span><i className="legend-box aisle-dot" /> Проезд · м</span><span className="aisle-warning-legend">Красный – уже погрузчика</span>{highlightedRobotId && <button className="clear-route-button" type="button" onClick={() => setHighlightedRobotId(null)}>Снять выделение</button>}</div>
+            <WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={highlightedRobotId} onRack={selectRack} onRobot={selectRobot} />
+            <div className="map-footer"><span><i className="footer-pulse" /> Карта обновляется автоматически</span><span>Выберите объект для подробностей</span></div>
           </section>
 
+          <ObjectInspector rack={selectedRackData} robot={selectedOrder ? undefined : selectedRobot} order={selectedOrder} phase={selectedRobot ? phaseNames[selectedRobot.driver_phase] : undefined} status={selectedOrder ? orderNames[selectedOrder.status] : undefined} onClose={() => { setSelectedRackId(null); setHighlightedRobotId(null); setSelectedOrderId(null) }} onRackDetails={() => setDetailRackId(selectedRackId)} />
           <div className="lower-grid">
-            <section className="panel orders-panel">
-              <div className="panel-heading compact-heading"><div><p className="eyebrow">FULFILLMENT</p><h2>Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span></div>
+            <section className="panel orders-panel" id="orders">
+              <div className="panel-heading compact-heading"><div><p className="eyebrow">ЗАКАЗЫ</p><h2>Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span></div>
               <div className="order-tools"><div className="order-search"><span aria-hidden="true">⌕</span><input value={orderQuery} onChange={event => setOrderQuery(event.target.value)} placeholder="Найти заказ или товар" aria-label="Поиск заказов" /><button type="button" aria-label="Очистить поиск" onClick={() => setOrderQuery('')} disabled={!orderQuery}>×</button></div><label className="order-filter"><span>Статус</span><select value={orderStatusFilter} onChange={event => setOrderStatusFilter(event.target.value as OrderStatusFilter)} aria-label="Фильтр по статусу"><option value="all">Все</option>{Object.entries(orderNames).map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select></label></div>
               <div className="order-list">
-                {filteredOrders.map((order) => <OrderRow key={order.id} order={order} highlightedRobotId={highlightedRobotId} onShowRoute={showOrderRoute} />)}
+                {filteredOrders.map((order) => <OrderRow key={order.id} order={order} highlightedRobotId={highlightedRobotId} onShowRoute={showOrderRoute} onSelect={() => { setSelectedOrderId(order.id); setSelectedRackId(null); setHighlightedRobotId(order.robot_id); setPanelsVisible(true) }} />)}
                 {filteredOrders.length === 0 && <div className="order-empty">Заказы по этому запросу не найдены.</div>}
               </div>
             </section>
+          <section className="panel activity-panel">
+            <div className="panel-heading compact-heading"><div><p className="eyebrow">СОБЫТИЯ</p><h2>Журнал событий</h2></div><span className="activity-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
+            <label className="event-filter">Источник <select value={eventSource} onChange={event => setEventSource(event.target.value)}><option value="all">Все события</option>{Object.entries(sourceNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <div className="event-list">
+              {visibleEvents.slice(0, 30).map((event, index) => <div className="event-row" key={event.id}><div className={`event-line ${event.source}`}><i /></div><div className="event-copy"><div><span className={`source-label ${event.source}`}>{sourceNames[event.source] ?? event.source}</span><time>{new Date(event.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time></div><p>{event.message}</p></div>{index === 0 && state.running && <span className="new-event">Сейчас</span>}</div>)}
+            </div>
+            <div className="all-events">Показано {Math.min(30, visibleEvents.length)} из {visibleEvents.length} событий</div>
+          </section>
             <section className="panel fleet-panel">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">FLEET STATUS</p><h2>Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span></div>
+            <div className="panel-heading compact-heading"><div><p className="eyebrow">ТЕХНИКА</p><h2>Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span></div>
               <div className="fleet-list">
-                {robots.map((robot) => <div className={`fleet-row ${highlightedRobotId === robot.id ? 'is-selected' : ''}`} key={robot.id}><div className="fleet-icon">✣</div><div className="fleet-info"><strong>{robot.id}<small>{phaseNames[robot.driver_phase]}</small></strong><span>{robot.order_id ? `Задание ${robot.order_id}` : 'Нет активного задания'}</span></div><button type="button" className="fleet-map-button" aria-pressed={highlightedRobotId === robot.id} onClick={() => setHighlightedRobotId(current => current === robot.id ? null : robot.id)}>{highlightedRobotId === robot.id ? 'На карте ✓' : 'Показать'}</button><a className="driver-link" href={`?view=driver&vehicle=${robot.id}`} target="_blank" rel="noreferrer">Планшет ↗</a><button className="stop-button" disabled={busy || connection !== 'online'} onClick={() => command(`/api/robots/${robot.id}/${robot.status === 'stopped' ? 'resume' : 'stop'}`)}>{robot.status === 'stopped' ? '▶' : 'Ⅱ'}</button></div>)}
+                {robots.map((robot) => <div className={`fleet-row ${highlightedRobotId === robot.id ? 'is-selected' : ''}`} key={robot.id}><div className="fleet-icon">✣</div><div className="fleet-info"><strong>{robot.id}<small>{phaseNames[robot.driver_phase]}</small></strong><span>{robot.order_id ? `Задание ${robot.order_id}` : 'Нет активного задания'}</span></div><button type="button" className="fleet-map-button" aria-pressed={highlightedRobotId === robot.id} onClick={() => selectRobot(robot.id)}>{highlightedRobotId === robot.id ? 'На карте ✓' : 'Показать'}</button><a className="driver-link" href={`?view=driver&vehicle=${robot.id}`} target="_blank" rel="noreferrer">Планшет ↗</a><button className="stop-button" aria-label={`${robot.status === 'stopped' ? 'Продолжить' : 'Остановить'} ${robot.id}`} disabled={busy || connection !== 'online'} onClick={() => command(`/api/robots/${robot.id}/${robot.status === 'stopped' ? 'resume' : 'stop'}`)}>{robot.status === 'stopped' ? '▶' : 'Ⅱ'}</button></div>)}
               </div>
             </section>
           </div>
           <section className="panel inventory-panel">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">STOCK & RESERVATIONS</p><h2>Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span></div>
+            <div className="panel-heading compact-heading"><div><p className="eyebrow">ЗАПАСЫ И РЕЗЕРВЫ</p><h2>Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span></div>
             <div className="inventory-list">
               {inventory.map((item) => <div className="inventory-row" key={item.id}><span className={`stock-box ${item.status}`}>▧</span><div className="inventory-info"><strong>{item.name}</strong><span>{item.product_id || item.id} · {item.quantity} шт. · {formatDimensions(item.length_mm, item.width_mm, item.height_mm)} · {warehouse!.storage_locations.find(location => location.id === item.location_id)?.address || 'без адреса'}</span></div><div className={`stock-status ${item.status}`}>{item.quantity - Object.values(item.reservations).reduce((sum, amount) => sum + amount, 0)} доступно</div></div>)}
             </div>
@@ -507,8 +379,9 @@ function App() {
         </section>
 
         <aside className="side-column">
+
           <section className="panel control-panel">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">SIMULATION CONTROL</p><h2>Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /></div>
+            <div className="panel-heading compact-heading"><div><p className="eyebrow">СИМУЛЯЦИЯ</p><h2>Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /></div>
             <p className="control-copy">{state.running ? 'Откройте планшет водителя: примите задание, подтвердите забор и доставку. Движение моделируется автоматически.' : 'Запустите симуляцию, чтобы начать складскую операцию.'}</p>
             <button className={`primary-button ${state.running ? 'pause-action' : ''}`} disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}><span>{state.running ? 'Ⅱ' : '▶'}</span>{state.running ? 'Приостановить' : 'Начать симуляцию'}</button>
             <button className="congestion-button" disabled={busy || connection !== 'online' || !state.can_create_congestion} onClick={() => command('/api/simulation/congestion')}>⚠ <span>Смоделировать затор</span></button>
@@ -516,20 +389,13 @@ function App() {
             <button className="secondary-button" disabled={busy || connection !== 'online' || !warehouse!.closed_cells.length} onClick={() => command('/api/aisles/reopen')}>Открыть проходы ({warehouse!.closed_cells.length})</button>
           </section>
 
-          <section className="panel agent-panel">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">MULTI-AGENT SYSTEM</p><h2>Координация агентов</h2></div><span className="count-pill">3 РОЛИ</span></div>
+          <details className="panel agent-panel"><summary>Как работают агенты склада</summary>
+            <div className="panel-heading compact-heading"><div><p className="eyebrow">СПРАВКА</p><h2>Координация агентов</h2></div><span className="count-pill">3 РОЛИ</span></div>
             <div className="agent-card manager-card"><div className="agent-avatar manager-avatar">M</div><div><strong>Менеджер склада</strong><span>Приоритеты и назначения</span></div><span className="agent-indicator" /></div>
-            <div className="agent-subgrid"><div className="agent-mini"><div className="agent-avatar robot-avatar">R</div><strong>Агенты техники</strong><span>Маршруты · 2 узла</span><i /></div><div className="agent-mini"><div className="agent-avatar zone-avatar">Z</div><strong>Агент зоны A</strong><span>Проходы · ячейки</span><i /></div></div>
-            <div className="agent-note"><span>i</span><p>Сейчас роли работают на обычных алгоритмах без LLM. Подключение языковой модели можно добавить позже.</p></div>
-          </section>
+            <div className="agent-subgrid"><div className="agent-mini"><div className="agent-avatar robot-avatar">R</div><strong>Агенты техники</strong><span>Маршруты · {robots.length} ед.</span><i /></div><div className="agent-mini"><div className="agent-avatar zone-avatar">Z</div><strong>Агент зоны</strong><span>Проходы · ячейки</span><i /></div></div>
+            <div className="agent-note"><span>i</span><p>Менеджер назначает задания, планировщик строит маршруты, агент зоны учитывает перекрытия. Решения и действия отражены в журнале.</p></div>
+          </details>
 
-          <section className="panel activity-panel">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">LIVE FEED</p><h2>Журнал событий</h2></div><span className="activity-live"><i /> LIVE</span></div>
-            <div className="event-list">
-              {state.events.slice(0, 8).map((event, index) => <div className="event-row" key={event.id}><div className={`event-line ${event.source}`}><i /></div><div className="event-copy"><div><span className={`source-label ${event.source}`}>{sourceNames[event.source] ?? event.source}</span><time>{new Date(event.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time></div><p>{event.message}</p></div>{index === 0 && state.running && <span className="new-event">NOW</span>}</div>)}
-            </div>
-            <div className="all-events">Последние 8 событий из {state.events.length}</div>
-          </section>
           <div className="footnote"><span className="secure-icon">◇</span> СИМУЛЯЦИЯ · ВИРТУАЛЬНЫЙ СКЛАД</div>
         </aside>
         </>}
@@ -542,9 +408,9 @@ function Metric({ label, value, accent, icon }: { label: string; value: string; 
   return <div className="metric-card"><div><span className="metric-label">{label}</span><strong>{value}</strong></div><span className={`metric-icon ${accent}`}>{icon}</span></div>
 }
 
-function OrderRow({ order, highlightedRobotId, onShowRoute }: { order: Order; highlightedRobotId: string | null; onShowRoute: (robotId: string) => void }) {
+function OrderRow({ order, highlightedRobotId, onShowRoute, onSelect }: { order: Order; highlightedRobotId: string | null; onShowRoute: (robotId: string) => void; onSelect: () => void }) {
   const addresses = order.allocations.map(allocation => `${allocation.storage_location_id} (${allocation.quantity} шт.)`).join(' · ')
-  return <div className="order-row"><div className={`order-symbol ${order.status === 'completed' ? 'done' : ''}`}>{order.status === 'completed' ? '✓' : '↗'}</div><div className="order-main"><strong>{order.id}<span>{order.item} · {order.quantity} шт.</span></strong><small>{order.length_mm && order.width_mm && order.height_mm ? `${formatDimensions(order.length_mm, order.width_mm, order.height_mm)} · ` : ''}{order.robot_id ? `Погрузчик ${order.robot_id}` : 'Ожидает назначения'}{addresses ? ` · ${addresses}` : order.storage_location_id ? ` · ${order.storage_location_id}` : ''}</small></div><div className="order-state"><span className={`order-status ${order.status}`}>{orderNames[order.status]}</span><small>{order.pickup.join(', ')} → {order.dropoff.join(', ')}</small>{order.robot_id && <button className="order-map-action" type="button" aria-pressed={highlightedRobotId === order.robot_id} onClick={() => onShowRoute(order.robot_id!)}>{highlightedRobotId === order.robot_id ? 'Маршрут выбран' : 'Показать маршрут ↗'}</button>}</div></div>
+  return <div className="order-row"><div className={`order-symbol ${order.status === 'completed' ? 'done' : ''}`}>{order.status === 'completed' ? '✓' : '↗'}</div><div className="order-main"><strong><button type="button" className="order-detail-button" onClick={onSelect}>{order.id} ↗</button><span>{order.item} · {order.quantity} шт.</span></strong><small>{order.length_mm && order.width_mm && order.height_mm ? `${formatDimensions(order.length_mm, order.width_mm, order.height_mm)} · ` : ''}{order.robot_id ? `Погрузчик ${order.robot_id}` : 'Ожидает назначения'}{addresses ? ` · ${addresses}` : order.storage_location_id ? ` · ${order.storage_location_id}` : ''}</small></div><div className="order-state"><span className={`order-status ${order.status}`}>{orderNames[order.status]}</span><small>Забор: {order.storage_location_id || order.pickup.join(', ')}<br />Отгрузка: клетка {order.dropoff.join(', ')}</small>{order.robot_id && <button className="order-map-action" type="button" aria-pressed={highlightedRobotId === order.robot_id} onClick={() => onShowRoute(order.robot_id!)}>{highlightedRobotId === order.robot_id ? 'Маршрут выбран' : 'Показать маршрут ↗'}</button>}</div></div>
 }
 
 const phaseNames: Record<Robot['driver_phase'], string> = {
@@ -552,8 +418,8 @@ const phaseNames: Record<Robot['driver_phase'], string> = {
   confirm_pickup: 'Ждёт подтверждения забора', to_dropoff: 'Везёт товар', confirm_delivery: 'Ждёт подтверждения доставки',
 }
 
-function DriverTablet({ robot, robots, order, width, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
-  robot: Robot; robots: Robot[]; order?: Order; width: number; cells: React.ReactNode; physicalScale: PhysicalScale;
+function DriverTablet({ robot, robots, order, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
+  robot: Robot; robots: Robot[]; order?: Order; cells: React.ReactNode; physicalScale: PhysicalScale;
   running: boolean; busy: boolean; online: boolean; events: EventItem[];
   onSelect: (id: string) => void; onCommand: (path: string, body?: unknown) => Promise<void>;
 }) {
@@ -595,12 +461,12 @@ function DriverTablet({ robot, robots, order, width, cells, physicalScale, runni
       <section className="tablet-map panel"><div className="tablet-map-title"><div><p className="eyebrow">НАВИГАЦИЯ · {robot.id}</p><h2>{destination ? `Цель: ${destination.join(' · ')}` : 'Карта склада'}</h2><small className="tablet-dimensions">Шаг сетки {physicalScale.cellStepM.toFixed(1)} м · габарит {physicalScale.forkliftLengthM.toFixed(1)} × {physicalScale.forkliftWidthM.toFixed(1)} м (демо)</small></div><span className="map-live">{online ? '● На связи' : '○ Нет связи'}</span></div>
       {robot.status === 'waiting' && ['to_pickup', 'to_dropoff', 'returning'].includes(robot.driver_phase) && <div className="workflow-notice">Свободного пути нет. Ожидайте открытия прохода диспетчером.</div>}
       {robot.route_version > 0 && <div className="route-update">Маршрут пересмотрен · версия {robot.route_version}</div>}
-      <div className="map-legend"><span><i className="legend-dot robot-dot" /> Вы · Я</span><span><i className="legend-box route-dot" /> Ваш маршрут</span><span>Серые метки — другая техника</span><span>! — перекрытый проход</span></div>
-      <div className="map-scroll"><div className="warehouse-map tablet-warehouse-map" style={{ gridTemplateColumns: `repeat(${width}, minmax(35px, 1fr))` }}>{cells}</div></div><div className="tablet-position"><span><small>ВАША ПОЗИЦИЯ</small><strong>{robot.position.join(' · ')}</strong></span><span><small>КЛЕТОК ДО ЦЕЛИ</small><strong>{robot.route.length || (destination && key(destination) !== key(robot.position) ? '—' : '0')}</strong></span><span><small>ГРУЗ</small><strong>{robot.carrying_item ? 'На борту' : 'Пусто'}</strong></span></div>
+      <div className="map-legend"><span><i className="legend-dot robot-dot" /> Выбранный погрузчик</span><span><i className="legend-box route-dot" /> Ваш маршрут</span><span>Маршрут выбранного погрузчика</span><span>! – перекрытый проход</span></div>
+      <div className="tablet-scene">{cells}</div><div className="tablet-position"><span><small>ВАША ПОЗИЦИЯ</small><strong>{robot.position.join(' · ')}</strong></span><span><small>КЛЕТОК ДО ЦЕЛИ</small><strong>{robot.route.length || (destination && key(destination) !== key(robot.position) ? '–' : '0')}</strong></span><span><small>ГРУЗ</small><strong>{robot.carrying_item ? 'На борту' : 'Пусто'}</strong></span></div>
       <div className="driver-events" aria-live="polite">{events.filter((event) => event.robot_id === robot.id).slice(0, 3).map((event) => <p key={event.id}>{event.message}</p>)}</div>
       </section>
     </div>
-    <footer className="tablet-footer"><span>Виртуальный склад · координаты в клетках · без LLM</span><span>{online ? 'Подключено к симуляции' : 'Последнее известное состояние'}</span></footer>
+    <footer className="tablet-footer"><span>Виртуальный склад · координаты в клетках</span><span>{online ? 'Подключено к симуляции' : 'Последнее известное состояние'}</span></footer>
   </section>
 }
 
@@ -610,24 +476,22 @@ function formatCount(value: number, one: string, few: string, many: string) {
   return `${value} ${mod100 >= 11 && mod100 <= 14 ? many : mod10 === 1 ? one : mod10 >= 2 && mod10 <= 4 ? few : many}`
 }
 
-function RackPreview({ rack, style }: { rack: Rack; style: React.CSSProperties }) {
-  const fill = occupancyPercent(rack.occupied_locations, rack.location_count)
-  const dimensions = [
-    { label: 'Ширина', value: rack.width_mm, unit: 'м' },
-    { label: 'Глубина', value: rack.depth_mm, unit: 'м' },
-    { label: 'Высота', value: rack.height_mm, unit: 'м' },
-    { label: 'Ярусов', value: rack.levels, unit: 'ур.' },
-  ]
-  return <div id="rack-tooltip" role="tooltip" className="rack-tooltip" style={style}>
-    <div className="rack-preview-heading"><div><span className="rack-preview-kicker">СТЕЛЛАЖ</span><strong>{rack.id}</strong></div><span className="rack-type-badge">{rack.rack_type_title}</span></div>
-    <p className="rack-preview-purpose">{rack.purpose}</p>
-    <div className="rack-preview-specs">{dimensions.map(dimension => <div key={dimension.label}><span>{dimension.label}</span><strong>{dimension.label === 'Ярусов' ? dimension.value : formatMillimeters(dimension.value)} <small>{dimension.unit}</small></strong></div>)}</div>
-    <div className="rack-preview-chips"><span className="rack-chip occupied">Занято {rack.occupied_locations}/{rack.location_count} мест</span><span className="rack-chip boxes">{formatCount(rack.package_count, 'коробка', 'коробки', 'коробок')}</span><span className="rack-chip fill">{formatPercent(fill)}% мест занято</span><span className="rack-chip area">{formatSquareMillimeters(rack.free_surface_mm2)} свободно</span></div>
-    <div className="rack-preview-progress" role="progressbar" aria-label="Занятость мест стеллажа" aria-valuenow={fill} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${fill}%` }} /></div>
-  </div>
-}
-
 function RackDetails({ rack, locations, onClose }: { rack: Rack; locations: StorageLocation[]; onClose: () => void }) {
+  const dialogRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    dialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    const trap = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
+      if (event.key !== 'Tab') return
+      const items = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input, select, [tabindex="0"]') ?? [])]
+      const first = items[0], last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+    }
+    document.addEventListener('keydown', trap)
+    return () => { document.removeEventListener('keydown', trap); previous?.focus() }
+  }, [])
   const byLevel = new Map<number, StorageLocation[]>()
   locations.forEach(location => byLevel.set(location.level, [...(byLevel.get(location.level) || []), location]))
   const levels = [...byLevel.keys()].sort((a, b) => a - b)
@@ -661,20 +525,21 @@ function RackDetails({ rack, locations, onClose }: { rack: Rack; locations: Stor
   }, [])
 
   return <div className="rack-drawer-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }} onKeyDown={event => { if (event.key === 'Escape') onClose() }}>
-    <section className="rack-drawer" role="dialog" aria-modal="true" aria-labelledby="rack-drawer-title">
+    <section ref={dialogRef} className="rack-drawer" role="dialog" aria-modal="true" aria-labelledby="rack-drawer-title">
       <header className="rack-dialog-header"><div><p className="rack-dialog-kicker">СКЛАДСКОЕ МЕСТО</p><div className="rack-dialog-title-line"><h2 id="rack-drawer-title">Стеллаж {rack.id}</h2><span className="rack-type-badge">{rack.rack_type_title}</span></div><p className="rack-dialog-purpose">{rack.purpose}</p></div><button type="button" className="rack-dialog-close" aria-label="Закрыть карточку стеллажа" onClick={onClose}>×</button></header>
+      <div className="rack-dialog-body">
       <div className="rack-dialog-specs"><span>{formatDimensions(rack.width_mm, rack.depth_mm, rack.height_mm)}</span><i /> <span>{formatCount(rack.levels, 'ярус', 'яруса', 'ярусов')}</span></div>
       <section className="rack-summary" aria-label="Сводка стеллажа">
         <div className="rack-kpi-grid">
           <RackKpi label="Занято мест" value={`${occupiedCount}`} suffix={`/ ${rack.location_count}`} tone="amber" />
           <RackKpi label="Свободно мест" value={`${rack.free_locations}`} suffix="мест" tone="green" />
           <RackKpi label="Коробок" value={`${rack.package_count}`} suffix="всего" tone="blue" />
-          <RackKpi label="Занятость мест" value={formatPercent(fill)} suffix="%" tone="violet" />
+
           <RackKpi label="Свободная площадь" value={formatSquareMillimeters(rack.free_surface_mm2)} suffix="" tone="green" />
-          <RackKpi label="Ярусов" value={`${rack.levels}`} suffix="" tone="slate" />
+
         </div>
         <div className="rack-summary-progress"><div className="rack-summary-progress-label"><span>Занятость мест</span><strong>{formatPercent(fill)}%</strong></div><div className="rack-preview-progress" role="progressbar" aria-label="Занятость мест стеллажа" aria-valuenow={fill} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${fill}%` }} /></div></div>
-        <p className="rack-info-note"><span aria-hidden="true">ⓘ</span> Свободная площадь может быть разделена на отдельные участки</p>
+        <p className="rack-info-note"><span aria-hidden="true">ⓘ</span> Место – участок полки для нескольких коробок. Свободная площадь суммируется по всем полкам.</p>
       </section>
       <div className="rack-level-toolbar"><div><h3>Содержимое по ярусам</h3><span>{formatCount(locations.length, 'место', 'места', 'мест')}</span></div><button type="button" className="rack-expand-all" onClick={() => setExpandedLevels(showAllLevels ? new Set(levels) : new Set())}>{showAllLevels ? 'Развернуть все' : 'Свернуть все'}</button></div>
       <div className="rack-filter-row" role="group" aria-label="Фильтр мест"><button type="button" className={filter === 'all' ? 'selected' : ''} onClick={() => selectFilter('all')}>Все места <span>{locations.length}</span></button><button type="button" className={filter === 'occupied' ? 'selected' : ''} onClick={() => selectFilter('occupied')}>Занятые <span>{occupiedCount}</span></button><button type="button" className={filter === 'free' ? 'selected' : ''} onClick={() => selectFilter('free')}>Свободные <span>{locations.length - occupiedCount}</span></button></div>
@@ -691,6 +556,7 @@ function RackDetails({ rack, locations, onClose }: { rack: Rack; locations: Stor
         </section>
       })}</div>
       {!locations.length && <div className="rack-empty-state"><span>▤</span><strong>Места пока не добавлены</strong><p>Для этого стеллажа нет данных о местах хранения.</p></div>}
+      </div>
     </section>
   </div>
 }
@@ -743,7 +609,7 @@ function getPlacementBoxes(location: StorageLocation): { boxes: PlacementBox[]; 
 }
 
 function productColor(id: string): string {
-  const colors = ['#dcebd4', '#d3e5cb', '#e5eedf', '#cfe2c5']
+  const colors = ['#456e61', '#4d7969', '#527d70', '#41695d']
   let hash = 0
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
   return colors[hash % colors.length]
@@ -763,35 +629,41 @@ function StorageSlot({ location }: { location: StorageLocation }) {
   const maxX = Math.max(location.width_mm, ...numericBoxes.map(box => box.placement.x_mm + Math.max(0, box.placement.length_mm)))
   const maxY = Math.max(location.depth_mm, ...numericBoxes.map(box => box.placement.y_mm + Math.max(0, box.placement.width_mm)))
   const gridId = `placement-grid-${location.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+  const diagramWidth = Math.max(1, maxX - minX)
+  const diagramDepth = Math.max(1, maxY - minY)
 
-  return <article className={`storage-slot ${location.occupied ? 'occupied' : 'free'}`}>
+  return <article className={`storage-slot ${location.occupied ? 'occupied' : 'free'} ${showPlacement ? 'has-placement' : ''}`}>
     <div className="storage-slot-heading"><div><strong>{location.address}</strong><span className={`storage-slot-status ${location.occupied ? 'occupied' : 'free'}`}>{location.occupied ? 'Занято' : 'Свободно'}</span></div>{location.package_count > 0 && <span className="storage-slot-count">{formatCount(location.package_count, 'коробка', 'коробки', 'коробок')}</span>}</div>
+    <div className="storage-slot-content">
     <div className="storage-slot-specs"><div><span>Размер места</span><strong>{formatDimensions(location.width_mm, location.depth_mm, location.max_height_mm)}</strong></div><div><span>Свободная площадь</span><strong>{formatSquareMillimeters(location.free_surface_mm2)}</strong></div></div>
     {location.items.length ? <>
       <div className="storage-item-list">{visibleItems.map(item => <article className={`storage-item ${hoveredItemId === item.id ? 'is-highlighted' : ''}`} key={item.id} tabIndex={0} onMouseEnter={() => setHoveredItemId(item.id)} onMouseLeave={() => setHoveredItemId(null)} onFocus={() => setHoveredItemId(item.id)} onBlur={() => setHoveredItemId(null)}><span className="storage-item-icon" aria-hidden="true">▧</span><span className="storage-item-main"><strong>{item.name}</strong><small>{formatDimensions(item.length_mm, item.width_mm, item.height_mm)}</small></span><span className="storage-item-quantity">{item.quantity.toLocaleString('ru-RU')} шт.</span></article>)}</div>
-      {hasHiddenItems && <button type="button" className="storage-more-button" onClick={() => setShowAllItems(true)}>Показать ещё {location.items.length - visibleItems.length}</button>}
+      {(hasHiddenItems || showAllItems) && location.items.length > 3 && <button type="button" className="storage-more-button" aria-expanded={showAllItems} onClick={() => setShowAllItems(value => !value)}>{showAllItems ? 'Свернуть содержимое' : `Показать ещё ${location.items.length - visibleItems.length}`}</button>}
+    </> : <div className="storage-slot-empty"><span aria-hidden="true">＋</span><span>Товаров нет</span></div>}
+    </div>
       <button type="button" className="storage-placement-button" aria-expanded={showPlacement} onClick={() => setShowPlacement(value => !value)}>{showPlacement ? 'Скрыть размещение' : 'Показать размещение'}</button>
       {showPlacement && <div className={`storage-placement ${invalidCount ? 'has-errors' : ''}`}>
-        <div className="storage-placement-heading"><strong>Схема размещения</strong><span>{formatDimensions(location.width_mm, location.depth_mm, location.max_height_mm)}</span></div>
-        <svg className="storage-placement-diagram" style={{ width: `min(100%, 300px, ${240 * location.width_mm / location.depth_mm}px)` }} viewBox={`${minX} ${minY} ${Math.max(1, maxX - minX)} ${Math.max(1, maxY - minY)}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={`Схема размещения ${location.address}, ${boxes.length} коробок, размер места ${formatDimensions(location.width_mm, location.depth_mm, location.max_height_mm)}`}>
-          <defs><pattern id={gridId} width="100" height="100" patternUnits="userSpaceOnUse"><path d="M 100 0 L 0 0 0 100" fill="none" stroke="#eaf0e7" strokeWidth="2" /></pattern></defs>
-          <rect x={minX} y={minY} width={maxX - minX} height={maxY - minY} fill="#f7faf5" />
-          <rect x="0" y="0" width={location.width_mm} height={location.depth_mm} fill={`url(#${gridId})`} stroke="#9caf94" strokeWidth="5" />
-          {boxes.map(box => {
+        <div className="storage-placement-heading"><div><strong>Схема размещения</strong><span>Вид сверху</span></div><span>{formatDimensions(location.width_mm, location.depth_mm, location.max_height_mm)}</span></div>
+        <div className="storage-placement-canvas">
+        <svg className="storage-placement-diagram" style={{ width: `min(100%, calc(var(--placement-height) * ${diagramWidth / diagramDepth}))`, aspectRatio: `${diagramWidth} / ${diagramDepth}` }} viewBox={`${minX} ${minY} ${diagramWidth} ${diagramDepth}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={`Вид сверху: ${location.address}, ${formatCount(numericBoxes.length, 'коробка', 'коробки', 'коробок')}, размер места ${formatDimensions(location.width_mm, location.depth_mm, location.max_height_mm)}`}>
+          <defs><pattern id={gridId} width="100" height="100" patternUnits="userSpaceOnUse"><path d="M 100 0 L 0 0 0 100" fill="none" stroke="#a0b9cc" strokeOpacity=".12" strokeWidth=".5" vectorEffect="non-scaling-stroke" /></pattern></defs>
+          <rect x={minX} y={minY} width={maxX - minX} height={maxY - minY} fill="#101a22" />
+          <rect x="0" y="0" width={location.width_mm} height={location.depth_mm} fill={`url(#${gridId})`} />
+          {numericBoxes.map(box => {
             const { placement, item, packageId, issue } = box
             const boxLabel = `${item.name} №${box.sequence}`
             return <g key={packageId} data-package-id={packageId} className={`placement-box ${issue ? 'invalid' : ''} ${hoveredItemId === item.id ? 'highlighted' : ''}`} tabIndex={0} role="button" aria-label={`${boxLabel}, ${formatDimensions(item.length_mm, item.width_mm, item.height_mm)}, ${formatCoordinates(placement.x_mm, placement.y_mm)}${placement.rotated ? ', поворот 90 градусов' : ''}`} onMouseEnter={() => setHoveredItemId(item.id)} onMouseLeave={() => setHoveredItemId(null)} onFocus={() => setHoveredItemId(item.id)} onBlur={() => setHoveredItemId(null)}>
               <title>{`${boxLabel} · ${formatDimensions(item.length_mm, item.width_mm, item.height_mm)} · ${formatCoordinates(placement.x_mm, placement.y_mm)}${placement.rotated ? ' · поворот 90°' : ''}${issue ? ' · ошибка геометрии' : ''}`}</title>
-              <rect x={placement.x_mm} y={placement.y_mm} width={placement.length_mm} height={placement.width_mm} rx="8" fill={issue ? '#f2d6d2' : productColor(item.id)} stroke={issue ? '#b34c40' : '#729366'} strokeWidth="5" />
+              <rect x={placement.x_mm} y={placement.y_mm} width={Math.max(0, placement.length_mm)} height={Math.max(0, placement.width_mm)} fill={issue ? '#7c3c47' : productColor(item.id)} stroke={issue ? '#e66d75' : '#90c4a9'} strokeWidth="1" vectorEffect="non-scaling-stroke" />
             </g>
           })}
-          <rect x="0" y="0" width={location.width_mm} height={location.depth_mm} fill="none" stroke="#748e6d" strokeWidth="5" pointerEvents="none" />
+          <rect x="0" y="0" width={location.width_mm} height={location.depth_mm} fill="none" stroke="#648293" strokeWidth="1" vectorEffect="non-scaling-stroke" pointerEvents="none" />
         </svg>
-        <p className="storage-placement-caption">{boxes.length} коробок · координаты от левого верхнего угла места</p>
+        </div>
+        <div className="storage-placement-footer"><div className="storage-placement-legend" aria-label="Легенда схемы"><span><i className="occupied" />Занято</span><span><i className="free" />Свободно</span></div><span>{formatCount(numericBoxes.length, 'коробка', 'коробки', 'коробок')} на схеме</span></div>
+        {missingCount > 0 && <p className="storage-placement-warning">Координаты части коробок отсутствуют или не соответствуют количеству. Показаны только известные позиции.</p>}
         {invalidCount > 0 && <p className="storage-placement-warning" role="alert">Обнаружено проблем с геометрией: {invalidCount}. Выход за границы показан за рамкой схемы.</p>}
       </div>}
-    </> : <div className="storage-slot-empty"><span aria-hidden="true">＋</span><span>Товаров нет</span></div>}
   </article>
 }
-function WithLayoutLink() { return <><a style={{position:'fixed',bottom:12,right:18,zIndex:100,background:'#225dcb',color:'white',padding:'10px 16px',borderRadius:8}} href='?view=layout'>Конструктор склада ↗</a><App /></> }
-export default WithLayoutLink
+export default App

@@ -5,6 +5,9 @@ import LayoutEditor from './LayoutEditor'
 import './style.css'
 import './typography.css'
 import './rack-details.css'
+import './control-center.css'
+import './responsive.css'
+import './rack-modal.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
