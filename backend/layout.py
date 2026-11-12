@@ -3,7 +3,7 @@ from collections import deque
 import re
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from backend.models import Warehouse, Robot, Rack, StorageLocation
+from backend.models import Warehouse, Robot, Rack, StorageLocation, rack_pickup_faces
 from backend.rack_types import RACK_TYPES, rack_for_position, storage_address
 
 class Cell(BaseModel):
@@ -65,6 +65,12 @@ class Layout(BaseModel):
     height: int = Field(ge=4, le=30)
     cells: list[Cell] = Field(max_length=1200)
 
+    @model_validator(mode="after")
+    def remove_legacy_pickups(self) -> "Layout":
+        # Accept older JSON layouts, but discard obsolete collection zones.
+        self.cells = [cell for cell in self.cells if cell.kind != "pickup"]
+        return self
+
     def errors(self) -> list[str]:
         errors = []
         occupied = set()
@@ -86,11 +92,11 @@ class Layout(BaseModel):
                     errors.append(f"Слишком много мест хранения у стеллажа {c.id}")
             elif any(value is not None for value in (c.id, c.rack_type, c.width_mm, c.depth_mm, c.height_mm, c.positions_per_level, c.width_m, c.depth_m, c.height_m)):
                 errors.append("Размеры и ID задаются только для стеллажей")
-        for kind, label in [("robot", "стоянка техники"), ("pickup", "точка забора"), ("shipping", "отгрузка")]:
+        for kind, label in [("robot", "стоянка техники"), ("shipping", "отгрузка")]:
             if not any(c.kind == kind for c in self.cells):
                 errors.append(f"Необходима хотя бы одна: {label}")
         blocked = {(c.x, c.y) for c in self.cells if c.kind in ("rack", "wall")}
-        targets = [(c.x, c.y) for c in self.cells if c.kind in ("robot", "pickup", "shipping")]
+        targets = [(c.x, c.y) for c in self.cells if c.kind in ("robot", "shipping")]
         if targets and not errors:
             reached = {targets[0]}
             queue = deque(reached)
@@ -101,10 +107,10 @@ class Layout(BaseModel):
                         reached.add(q)
                         queue.append(q)
             if any(t not in reached for t in targets):
-                errors.append("Стоянки, забор и отгрузка должны соединяться проходами")
+                errors.append("Стоянки и отгрузка должны соединяться проходами")
             for c in self.cells:
-                if c.kind == "rack" and not any(q in reached for q in [(c.x+1,c.y),(c.x-1,c.y),(c.x,c.y+1),(c.x,c.y-1)]):
-                    errors.append(f"Нет доступа к стеллажу {(c.x,c.y)}")
+                if c.kind == "rack" and not any(q in reached for q in rack_pickup_faces((c.x, c.y))):
+                    errors.append(f"Нет доступа со стороны полок к стеллажу {(c.x,c.y)}")
         return errors
 
     def warehouse(self) -> Warehouse:
@@ -118,7 +124,7 @@ class Layout(BaseModel):
             rack.height_mm = cell.height_mm
             rack.levels = cell.levels
             rack.positions_per_level = cell.positions_per_level
-            neighbors = [(cell.x - 1, cell.y), (cell.x + 1, cell.y), (cell.x, cell.y + 1), (cell.x, cell.y - 1)]
+            neighbors = rack_pickup_faces(rack.position)
             rack.service_point = next((p for p in neighbors if 0 <= p[0] < self.width and 0 <= p[1] < self.height and p not in obstacle_set), None)
         locations = [
             StorageLocation(
@@ -138,7 +144,7 @@ class Layout(BaseModel):
             for position in range(1, rack.positions_per_level + 1)
         ]
         return Warehouse(width=self.width, height=self.height,
-            obstacles=points("rack") + points("wall"), pickup_points=points("pickup"),
+            obstacles=points("rack") + points("wall"), pickup_points=[],
             shipping_points=points("shipping"), robots=[Robot(id=f"R-{i:02d}", position=p, home=p) for i,p in enumerate(points("robot"),1)],
             racks=racks, storage_locations=locations)
 
@@ -146,5 +152,5 @@ class Layout(BaseModel):
 def from_warehouse(w: Warehouse) -> Layout:
     rack_points = {rack.position for rack in w.racks}
     cells = [Cell(x=r.position[0], y=r.position[1], kind="rack", id=r.id, rack_type=r.rack_type, width_mm=r.width_mm, depth_mm=r.depth_mm, height_mm=r.height_mm, levels=r.levels, positions_per_level=r.positions_per_level) for r in w.racks]
-    cells += [Cell(x=x,y=y,kind=k) for k,points in [("wall",[p for p in w.obstacles if p not in rack_points]),("pickup",w.pickup_points),("shipping",w.shipping_points),("robot",[r.home for r in w.robots])] for x,y in points]
+    cells += [Cell(x=x,y=y,kind=k) for k,points in [("wall",[p for p in w.obstacles if p not in rack_points]),("shipping",w.shipping_points),("robot",[r.home for r in w.robots])] for x,y in points]
     return Layout(width=w.width,height=w.height,cells=cells)

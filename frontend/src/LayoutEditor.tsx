@@ -2,11 +2,11 @@ import { Navigation, ThemeToggle } from './ControlCenter'
 import { useEffect, useRef, useState } from 'react'
 import './layout.css'
 import { meterInputValue, millimetersFromMeters } from './units'
-type Kind = 'rack' | 'wall' | 'pickup' | 'shipping' | 'robot'
+type Kind = 'rack' | 'wall' | 'shipping' | 'robot'
 type RackType = { key: string; title: string; purpose: string; width_mm: number; depth_mm: number; height_mm: number; levels: number; positions_per_level: number }
 type Cell = { x: number; y: number; kind: Kind; levels: number; id?: string; rack_type?: string; width_mm?: number; depth_mm?: number; height_mm?: number; positions_per_level?: number }
 type Layout = { version: 1; width: number; height: number; cells: Cell[] }
-const labels: Record<Kind, string> = { rack: 'Стеллаж', wall: 'Стена', pickup: 'Забор', shipping: 'Отгрузка', robot: 'Стоянка' }
+const labels: Record<Kind, string> = { rack: 'Стеллаж', wall: 'Стена', shipping: 'Отгрузка', robot: 'Стоянка' }
 const api = `http://${window.location.hostname}:8000`
 export default function LayoutEditor() {
   const [layout, setLayout] = useState<Layout | null>(null)
@@ -42,7 +42,7 @@ export default function LayoutEditor() {
       const candidate = JSON.parse(await file.text())
       const result = await request('/api/layout/validate', 'POST', candidate)
       if (!result.valid) throw new Error(result.errors.join('; '))
-      setLayout(candidate); setMessage('Макет загружен в редактор. Нажмите «Применить», чтобы передать его симуляции.')
+      setLayout({ ...candidate, cells: candidate.cells.filter((cell: { kind: string }) => cell.kind !== 'pickup') }); setMessage('Макет загружен в редактор. Нажмите «Применить», чтобы передать его симуляции.')
     })
   }
   if (!layout) return <main className="layout-editor"><a href="?view=control">← Диспетчерская</a><p role="status">{message || 'Загрузка макета…'}</p></main>
@@ -74,7 +74,6 @@ export default function LayoutEditor() {
           const { warehouse } = await request('/api/state')
           await request('/api/orders', 'POST', {
             item: 'Демонстрационный груз',
-            pickup: warehouse.pickup_points[0],
             dropoff: warehouse.shipping_points[0],
             quantity: Number(data.get('quantity')),
             priority: Number(data.get('priority')),
@@ -92,8 +91,8 @@ export default function LayoutEditor() {
       <button onClick={() => { const url = URL.createObjectURL(new Blob([JSON.stringify(layout,null,2)], {type:'application/json'})); const a = document.createElement('a'); a.href=url; a.download='warehouse-layout.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000) }}>Скачать JSON</button>
       <label>Загрузить JSON<input disabled={busy} type="file" accept=".json,application/json" onChange={e => { const file=e.target.files?.[0]; if(file) void load(file); e.target.value='' }} /></label>
     </details></aside><section><div className="layout-summary">{layout.width} × {layout.height} клеток · {layout.cells.filter(c=>c.kind==='rack').length} стеллажей · {capacity} мест по ярусам</div>
-      <div className="editor-camera"><button onClick={() => { setFit(false); setCellSize(n => Math.max(32, n - 8)) }} aria-label="Уменьшить сетку">−</button><button onClick={() => { setFit(false); setCellSize(n => Math.min(88, n + 8)) }} aria-label="Увеличить сетку">+</button><button aria-pressed={fit} onClick={() => setFit(v => !v)}>{fit ? 'Рабочий масштаб' : 'Показать весь склад'}</button><span>Прокрутите сетку в любом направлении. Стеллаж: ярусы × места.</span></div><div className="layout-grid-scroll"><div className={`layout-grid ${fit ? 'fit-grid' : ''}`} style={{ gridTemplateColumns: `repeat(${layout.width}, ${fit ? 'minmax(0, 1fr)' : `${cellSize}px`})` }}>{Array.from({length:layout.width*layout.height},(_,i) => { const x=i%layout.width, y=Math.floor(i/layout.width), c=cells.get(`${x},${y}`); return <button key={i} style={{ width: fit ? '100%' : cellSize, height: fit ? 'auto' : cellSize, aspectRatio: '1' }} className={`layout-cell ${c?.kind || ''}`} title={`(${x}, ${y}) ${c ? labels[c.kind] : 'Проход'}`} aria-label={`(${x}, ${y}) ${c ? labels[c.kind] : 'Проход'}`} onClick={() => { if (tool === 'rack' && c?.kind === 'rack') { setSelectedRack(`${x},${y}`); return } const template=rackTypes[rackType]; setLayout({...layout,cells:[...layout.cells.filter(c=>c.x!==x || c.y!==y),...(tool==='erase' ? [] : [{x,y,kind:tool,levels:tool==='rack'?template?.levels || 5:1,...(tool==='rack' ? {id:`A-${String(y+1).padStart(2,'0')}${String(x+1).padStart(2,'0')}`,rack_type:rackType,width_mm:template?.width_mm||2700,depth_mm:template?.depth_mm||1100,height_mm:template?.height_mm||6000,positions_per_level:template?.positions_per_level||2} : {})}])]}); setSelectedRack(tool === 'rack' ? `${x},${y}` : null); setMessage('Есть изменения. Проверьте и примените макет.') }}>{c ? c.kind==='rack' ? `${c.levels} × ${c.positions_per_level || 2}` : {wall:'■',pickup:'З',shipping:'О',robot:'Р'}[c.kind] : <small>{x},{y}</small>}</button> })}</div></div>
-      <p role="status" className="layout-message">{message || 'З – забор · О – отгрузка · Р – стоянка. Координаты начинаются с нуля.'}</p>
+      <div className="editor-camera"><button onClick={() => { setFit(false); setCellSize(n => Math.max(32, n - 8)) }} aria-label="Уменьшить сетку">−</button><button onClick={() => { setFit(false); setCellSize(n => Math.min(88, n + 8)) }} aria-label="Увеличить сетку">+</button><button aria-pressed={fit} onClick={() => setFit(v => !v)}>{fit ? 'Рабочий масштаб' : 'Показать весь склад'}</button><span>Прокрутите сетку в любом направлении. Стеллаж: ярусы × места.</span></div><div className="layout-grid-scroll"><div className={`layout-grid ${fit ? 'fit-grid' : ''}`} style={{ gridTemplateColumns: `repeat(${layout.width}, ${fit ? 'minmax(0, 1fr)' : `${cellSize}px`})` }}>{Array.from({length:layout.width*layout.height},(_,i) => { const x=i%layout.width, y=Math.floor(i/layout.width), c=cells.get(`${x},${y}`); return <button key={i} style={{ width: fit ? '100%' : cellSize, height: fit ? 'auto' : cellSize, aspectRatio: '1' }} className={`layout-cell ${c?.kind || ''}`} title={`(${x}, ${y}) ${c ? labels[c.kind] : 'Проход'}`} aria-label={`(${x}, ${y}) ${c ? labels[c.kind] : 'Проход'}`} onClick={() => { if (tool === 'rack' && c?.kind === 'rack') { setSelectedRack(`${x},${y}`); return } const template=rackTypes[rackType]; setLayout({...layout,cells:[...layout.cells.filter(c=>c.x!==x || c.y!==y),...(tool==='erase' ? [] : [{x,y,kind:tool,levels:tool==='rack'?template?.levels || 5:1,...(tool==='rack' ? {id:`A-${String(y+1).padStart(2,'0')}${String(x+1).padStart(2,'0')}`,rack_type:rackType,width_mm:template?.width_mm||2700,depth_mm:template?.depth_mm||1100,height_mm:template?.height_mm||6000,positions_per_level:template?.positions_per_level||2} : {})}])]}); setSelectedRack(tool === 'rack' ? `${x},${y}` : null); setMessage('Есть изменения. Проверьте и примените макет.') }}>{c ? c.kind==='rack' ? `${c.levels} × ${c.positions_per_level || 2}` : {wall:'■',shipping:'О',robot:'Р'}[c.kind] : <small>{x},{y}</small>}</button> })}</div></div>
+      <p role="status" className="layout-message">{message || 'О – отгрузка · Р – стоянка. Координаты начинаются с нуля.'}</p>
       <p>Менеджер назначает задания, агент робота строит маршрут, агент зоны учитывает блокировки. Перед применением проверьте доступность объектов.</p>
     </section></div>
   </main></div>

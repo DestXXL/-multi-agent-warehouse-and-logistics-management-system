@@ -22,7 +22,7 @@
   max-width: 100%;
   padding: 6px;
   color: inherit;
-  background: var(--panel);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 5px;
   font: inherit;
@@ -37,10 +37,26 @@
   padding: 13px 16px;
   margin: 0 0 15px;
   border-color: #b9d7ae;
-  background: color-mix(in srgb, var(--panel) 94%, #8bc46b);
+  background: color-mix(in srgb, var(--surface) 94%, #8bc46b);
 }
 .latest-decision p { margin: 5px 0 0; font-size: 12px; line-height: 1.5; }
 .latest-decision .decision-evidence { color: var(--muted, #738078); font-size: 11px; }
 .latest-decision button { flex: 0 0 auto; border: 0; background: transparent; color: var(--accent, #557c39); font: inherit; cursor: pointer; }
 .dispatch-panel td { text-align: right; font-variant-numeric: tabular-nums; }
 .dispatch-panel th, .dispatch-panel td { padding: 4px; }
+
+.ai-overview { border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 10px; }
+.ai-overview p, .ai-agent-list small { overflow-wrap: anywhere; }
+.ai-status { color: var(--muted); }
+.ai-notice { border-left: 3px solid var(--accent, #557c39); padding-left: 10px; }
+.ai-stats, .ai-fields, .ai-agent-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ai-stats span { display: block; font-size: 11px; color: var(--muted); }
+.ai-stats strong { font-size: 17px; }
+.ai-agent-list article { padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
+.ai-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font-size: 11px; padding: 8px; background: var(--surface); }
+.ai-table-wrap { overflow-x: auto; }
+.ai-history { max-height: 420px; overflow: auto; display: grid; gap: 8px; }
+.dispatch-panel form label { display: grid; gap: 4px; min-width: 0; }
+.dispatch-panel form input, .dispatch-panel form select { box-sizing: border-box; width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 5px; font: inherit; color: inherit; background: var(--surface); }
+.dispatch-panel input[type=checkbox] { width: auto; }
+@media (max-width: 520px) { .ai-fields, .ai-agent-list { grid-template-columns: 1fr; } }

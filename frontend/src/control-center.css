@@ -225,7 +225,8 @@ h3 { font-size: 16px; }
 @media (max-width: 600px) { .app-shell { padding-left: 0; padding-top: 56px; }.app-navigation { width: 100%; height: 56px; bottom: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px 8px; border-right: 0; border-bottom: 1px solid var(--line); }.nav-brand { display: none; }.app-navigation button, .app-navigation a { min-height: 44px; padding: 6px; gap: 4px; }.app-navigation button span, .app-navigation a span { display: block; font-size: 10px; }.app-navigation svg { width: 16px; height: 16px; }.topbar { padding: 14px; min-height: 74px; gap: 10px; }.brand-lockup strong { font-size: 15px; }.brand-lockup span { font-size: 10px; }.header-start { padding: 7px 10px; font-size: 12px; min-height: 36px; }.workspace { padding: 18px 12px; }.page-heading { flex-wrap: wrap; gap: 12px; }.page-heading h1 { font-size: 24px; }.page-heading .muted { font-size: 12px; }.workspace-actions { margin-left: 0; }.metric-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }.metric-card { min-height: 78px; padding: 12px !important; }.metric-card:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }.metric-card:nth-child(4) { border-top: 1px solid var(--line); }.map-panel { padding: 14px 10px 10px; }.map-legend { font-size: 11px; gap: 8px 12px; }.map-legend .aisle-dot { display: none; }.scene-view-label { display: none; }.scene-toolbar label { margin-left: 0; }.scene-camera { margin-left: auto; }.warehouse-scene { min-height: 300px; }.scene-caption { font-size: 10px; }.scene-tooltip { bottom: 8px; left: 8px; right: 8px; }.side-column { display: flex; }.object-inspector .inspector-specs { grid-template-columns: 1fr 1fr; }.order-row { flex-wrap: wrap; }.order-state { margin-left: 38px; text-align: left; align-items: flex-start; }.fleet-row { flex-wrap: wrap; }.fleet-info { flex-basis: calc(100% - 50px); }.fleet-map-button { margin-left: 40px; }.inventory-info { flex-basis: calc(100% - 50px); }.tablet-task, .tablet-map { padding: 16px; }.tablet-header { flex-wrap: wrap; gap: 12px; }.tablet-footer { flex-wrap: wrap; }.rack-dialog-title-line { flex-wrap: wrap; }.rack-dialog-title-line h2 { font-size: 22px; }.rack-drawer { width: calc(100vw - 16px); max-height: calc(100dvh - 24px); padding: 18px 14px; }.layout-editor { padding: 20px 14px; }.layout-editor header { flex-wrap: wrap; }.layout-columns { grid-template-columns: minmax(0, 1fr); }.layout-editor aside { padding: 16px; }.toast-stack { top: 138px; right: 12px; } }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
-.scene-robot { transition: transform 650ms linear; }
+/* Fill the whole simulation tick so straight steps join without a dwell. */
+.scene-robot { transition: transform 1000ms linear; }
 .rack-level.open, .rack-level:hover { border-color: #535d60; box-shadow: none; }
 .storage-item:focus-visible { outline-color: var(--accent); }
 .order-empty { color: var(--muted); background: transparent; }
@@ -349,3 +350,18 @@ h3 { font-size: 16px; }
  .scene-caption { font-size: 12px; }
  .object-inspector .rack-elevation svg { height: 80px; }
 }
+
+.robot-orientation { transition: transform 600ms ease-in-out; }
+.robot-forks { stroke-width: 3; stroke-linecap: square; }
+.scene-robot.picking .robot-loader { animation: fork-loading 1.4s ease-in-out infinite; }
+.package-picking { animation: package-picking 1.4s ease-in-out infinite; }
+.robot-cargo { animation: cargo-loaded 500ms ease-out; transform-box: fill-box; transform-origin: center; }
+@keyframes fork-loading { 50% { transform: translateY(-2px); } }
+@keyframes package-picking { 50% { fill: #e7c78e; stroke: #fff0c8; stroke-width: 2; } }
+@keyframes cargo-loaded { from { opacity: 0; transform: scale(.65); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .scene-robot, .robot-orientation { transition: none; }
+  .scene-robot.picking .robot-loader, .package-picking, .robot-cargo { animation: none; }
+}
+
+.rack-end-panels { fill: none; stroke: var(--map-rack-edge); stroke-width: 4; }

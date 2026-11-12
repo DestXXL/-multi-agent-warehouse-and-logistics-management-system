@@ -4,6 +4,14 @@ from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 Point = tuple[int, int]
+
+
+def rack_pickup_faces(position: Point) -> tuple[Point, Point]:
+    """Shelf width follows X on the map; loading faces follow its Y edges."""
+    x, y = position
+    return (x, y - 1), (x, y + 1)
+
+
 OrderStatus = Literal["pending", "assigned", "picking", "delivering", "completed", "cancelled"]
 RobotStatus = Literal["idle", "moving", "waiting", "stopped"]
 ItemSize = Literal["small", "medium", "large"]
@@ -92,6 +100,8 @@ class Robot:
     kind: str = "forklift"
     driver_phase: str = "idle"
     route_version: int = 0
+    heading: int = 0  # Degrees clockwise: east, south, west, north.
+    motion: str = "idle"
 
     def to_dict(self) -> dict:
         result = asdict(self)
@@ -201,6 +211,10 @@ class Warehouse:
             })
             for row in data.get("inventory", [])
         ]
+        for stock in inventory:
+            location = next((loc for loc in locations if loc.id == stock.location_id), None)
+            if location and location.rack_id in racks_by_id:
+                stock.position = racks_by_id[location.rack_id].position
         from backend.rack_types import pack_packages
 
         locations_by_id = {location.id: location for location in locations}
@@ -282,7 +296,7 @@ class Warehouse:
             width=data["width"],
             height=data["height"],
             obstacles=[tuple(point) for point in data.get("obstacles", [])],
-            pickup_points=[tuple(point) for point in data.get("pickup_points", [])],
+            pickup_points=[],
             shipping_points=[tuple(point) for point in data.get("shipping_points", [])],
             robots=robots,
             racks=racks,

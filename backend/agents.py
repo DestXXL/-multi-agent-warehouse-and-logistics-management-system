@@ -86,6 +86,7 @@ class ManagerAgent:
         robots: list[Robot],
         route_cost: Callable[[Point, Point, set[Point]], int | None],
         first_stock_id: str | None = None,
+        access_points: Callable[[StockItem], list[Point]] | None = None,
     ) -> list[tuple[Robot, int, list[StockAllocation]]]:
         """Find feasible assignments, ordered by the deterministic policy."""
         candidates = [item for item in stock_items if (item.product_id or item.id) == order.product_id and item.location_id]
@@ -110,28 +111,29 @@ class ManagerAgent:
             allocations: list[StockAllocation] = []
             remaining_items = list(available_items)
             while remaining and remaining_items:
-                ranked: list[tuple[int, str, StockItem]] = []
+                ranked: list[tuple[int, str, Point, StockItem]] = []
                 for item in remaining_items:
                     if not allocations and first_stock_id is not None and item.id != first_stock_id:
                         continue
-                    first_leg = route_cost(current, item.position, occupied_by_robot[robot.id])
-                    if first_leg is None:
-                        continue
-                    tail = route_cost(item.position, order.dropoff, occupied_by_robot[robot.id])
-                    if tail is not None:
-                        ranked.append((first_leg + tail, item.id, item))
+                    for point in access_points(item) if access_points else [item.position]:
+                        first_leg = route_cost(current, point, occupied_by_robot[robot.id])
+                        if first_leg is None:
+                            continue
+                        tail = route_cost(point, order.dropoff, occupied_by_robot[robot.id])
+                        if tail is not None:
+                            ranked.append((first_leg + tail, item.id, point, item))
                 if not ranked:
                     break
-                _, _, item = min(ranked)
+                _, _, point, item = min(ranked)
                 amount = min(remaining, item.quantity - sum(item.reservations.values()))
                 if amount <= 0:
                     remaining_items.remove(item)
                     continue
-                leg = route_cost(current, item.position, occupied_by_robot[robot.id])
+                leg = route_cost(current, point, occupied_by_robot[robot.id])
                 assert leg is not None
                 total_cost += leg
                 allocations.append(StockAllocation(item.id, item.location_id, amount))
-                current = item.position
+                current = point
                 remaining -= amount
                 remaining_items.remove(item)
             if remaining:

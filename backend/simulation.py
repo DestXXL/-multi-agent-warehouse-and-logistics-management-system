@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from backend.agents import ManagerAgent, RobotAgent, ZoneAgent
 from backend.dispatch import Proposal, coordination_step, destination, record
-from backend.models import Order, Point, Robot, StockItem, Warehouse, StorageLocation, StockAllocation
+from backend.models import Order, Point, Robot, StockItem, Warehouse, StorageLocation, StockAllocation, rack_pickup_faces
 from backend.rack_types import (
     RACK_TYPES,
     demo_racks,
@@ -35,8 +35,7 @@ class WarehouseSimulation:
         racks = demo_racks(obstacles)
         obstacle_set = set(obstacles)
         for rack in racks:
-            x, y = rack.position
-            rack.service_point = next((p for p in [(x - 1, y), (x + 1, y), (x, y + 1), (x, y - 1)] if 0 <= p[0] < 12 and 0 <= p[1] < 8 and p not in obstacle_set), None)
+            rack.service_point = next((p for p in rack_pickup_faces(rack.position) if 0 <= p[0] < 12 and 0 <= p[1] < 8 and p not in obstacle_set), None)
         rack_by_id = {rack.id: rack for rack in racks}
         storage_locations = [
             StorageLocation(
@@ -60,19 +59,19 @@ class WarehouseSimulation:
             obstacles=obstacles,
             racks=racks,
             storage_locations=storage_locations,
-            pickup_points=[(3, 1), (3, 6), (8, 1), (8, 6)],
+            pickup_points=[],
             shipping_points=[(11, 1), (11, 6)],
             robots=[Robot(id="R-01", position=(0, 1), home=(0, 1)), Robot(id="R-02", position=(0, 6), home=(0, 6))],
             orders=[
-                Order(id="ORD-001", item="Коробка A-14", pickup=rack_by_id["A-01"].service_point, dropoff=(11, 1), item_id="SKU-001", product_id="SKU-001", quantity=3, priority=3),
-                Order(id="ORD-002", item="Коробка B-07", pickup=rack_by_id["A-05"].service_point, dropoff=(11, 6), item_id="SKU-002", product_id="SKU-002", priority=2),
-                Order(id="ORD-003", item="Коробка C-22", pickup=rack_by_id["A-03"].service_point, dropoff=(11, 6), product_id="SKU-003", quantity=5, priority=1),
+                Order(id="ORD-001", item="Коробка A-14", pickup=rack_by_id["A-01"].position, dropoff=(11, 1), item_id="SKU-001", product_id="SKU-001", quantity=3, priority=3),
+                Order(id="ORD-002", item="Коробка B-07", pickup=rack_by_id["A-05"].position, dropoff=(11, 6), item_id="SKU-002", product_id="SKU-002", priority=2),
+                Order(id="ORD-003", item="Коробка C-22", pickup=rack_by_id["A-03"].position, dropoff=(11, 6), product_id="SKU-003", quantity=5, priority=1),
             ],
             inventory=[
-                StockItem(id="SKU-001", name="Коробка A-14", position=rack_by_id["A-01"].service_point, size="small", product_id="SKU-001", location_id="A-01-L01-P01", quantity=12, length_mm=200, width_mm=150, height_mm=100),
-                StockItem(id="SKU-002", name="Коробка B-07", position=rack_by_id["A-05"].service_point, size="medium", product_id="SKU-002", location_id="A-05-L01-P01", quantity=8, length_mm=400, width_mm=300, height_mm=250),
-                StockItem(id="SKU-003-A03", name="Коробка C-22", position=rack_by_id["A-03"].service_point, size="large", product_id="SKU-003", location_id="A-03-L01-P01", quantity=3, length_mm=400, width_mm=200, height_mm=200),
-                StockItem(id="SKU-003-A04", name="Коробка C-22", position=rack_by_id["A-04"].service_point, size="large", product_id="SKU-003", location_id="A-04-L01-P01", quantity=2, length_mm=400, width_mm=200, height_mm=200),
+                StockItem(id="SKU-001", name="Коробка A-14", position=rack_by_id["A-01"].position, size="small", product_id="SKU-001", location_id="A-01-L01-P01", quantity=12, length_mm=200, width_mm=150, height_mm=100),
+                StockItem(id="SKU-002", name="Коробка B-07", position=rack_by_id["A-05"].position, size="medium", product_id="SKU-002", location_id="A-05-L01-P01", quantity=8, length_mm=400, width_mm=300, height_mm=250),
+                StockItem(id="SKU-003-A03", name="Коробка C-22", position=rack_by_id["A-03"].position, size="large", product_id="SKU-003", location_id="A-03-L01-P01", quantity=3, length_mm=400, width_mm=200, height_mm=200),
+                StockItem(id="SKU-003-A04", name="Коробка C-22", position=rack_by_id["A-04"].position, size="large", product_id="SKU-003", location_id="A-04-L01-P01", quantity=2, length_mm=400, width_mm=200, height_mm=200),
             ],
         )
         if self.custom_layout is not None:
@@ -82,7 +81,7 @@ class WarehouseSimulation:
             for item in replacement.inventory:
                 location = next(location for location in replacement.storage_locations if location.id == item.location_id)
                 rack = next(rack for rack in replacement.racks if rack.id == location.rack_id)
-                item.position = rack.service_point or rack.position
+                item.position = rack.position
             self.warehouse = replacement
         self._initialize_stock_placements()
         self.running = False
@@ -201,6 +200,9 @@ class WarehouseSimulation:
             order_data["width_mm"] = order.width_mm if order.width_mm is not None else (stock.width_mm if stock else None)
             order_data["height_mm"] = order.height_mm if order.height_mm is not None else (stock.height_mm if stock else None)
         for data, robot in zip(warehouse["robots"], self.warehouse.robots):
+            order = self._get_order(robot.order_id) if robot.order_id else None
+            data["pickup_location_id"] = order.storage_location_id if order and robot.driver_phase in ("to_pickup", "confirm_pickup") else None
+            data["pickup_product_id"] = order.product_id if order and data["pickup_location_id"] else None
             data["can_report_obstacle"] = self._report_point(robot) is not None
         warehouse["closed_cells"] = [list(point) for point in sorted(self.zone_agent.blocked_cells)]
         return {
@@ -213,6 +215,8 @@ class WarehouseSimulation:
             "dispatch": {
                 "mode": self.dispatch_mode, "model_available": self.model_available,
                 "metrics": self.shift_metrics(), "decisions": list(self.decisions),
+                "ai": self.harness.public() if hasattr(self, "harness") else None,
+                "agents": [{"id": r.id, "task": r.order_id, "status": r.driver_phase, "llm": False} for r in self.warehouse.robots],
             },
         }
 
@@ -265,7 +269,7 @@ class WarehouseSimulation:
                 rack = next(rack for rack in self.warehouse.racks if rack.id == location.rack_id)
                 stock_id = product_id if index == 0 else f"{product_id}@{location.id}"
                 stock = StockItem(
-                    id=stock_id, name=item, position=rack.service_point or rack.position, size=size,
+                    id=stock_id, name=item, position=rack.position, size=size,
                     product_id=product_id, location_id=location.id, quantity=len(placements),
                     length_mm=dimensions[0], width_mm=dimensions[1], height_mm=dimensions[2],
                     placement_x_mm=placements[0]["x_mm"], placement_y_mm=placements[0]["y_mm"],
@@ -390,8 +394,7 @@ class WarehouseSimulation:
         occupied = {item.position for item in self.warehouse.robots}
         # A report closes the next aisle cell, never a vehicle or a handling location.
         point = robot.route[0]
-        handling = set(self.warehouse.pickup_points + self.warehouse.shipping_points)
-        handling.update(rack.service_point for rack in self.warehouse.racks)
+        handling = set(self.warehouse.shipping_points)
         handling.update(robot.home for robot in self.warehouse.robots)
         handling.update(point for order in self.warehouse.orders for point in (order.pickup, order.dropoff))
         if point in occupied or point in handling:
@@ -442,9 +445,11 @@ class WarehouseSimulation:
             robot.status = "stopped" if robot.stopped_by_operator else "idle"
             return
         order = self._get_order(robot.order_id)
-        destination = order.dropoff if robot.driver_phase in ("to_dropoff", "confirm_delivery") else self._current_pickup_point(order)
         occupied = {other.position for other in self.warehouse.robots if other.id != robot.id}
-        robot.route = self._plan_route(robot.position, destination, occupied) or []
+        if robot.driver_phase in ("offered", "to_pickup", "confirm_pickup"):
+            robot.route = self._pickup_route(robot, order, occupied) or []
+        else:
+            robot.route = self._plan_route(robot.position, order.dropoff, occupied) or []
         if robot.stopped_by_operator:
             robot.status = "stopped"
         elif robot.driver_phase in ("offered", "confirm_pickup", "confirm_delivery"):
@@ -462,7 +467,7 @@ class WarehouseSimulation:
         if action == "accept" and robot.driver_phase == "offered":
             robot.driver_phase = "to_pickup"
             message = "принял задание"
-        elif action == "pickup" and robot.driver_phase == "confirm_pickup" and robot.position == order.pickup:
+        elif action == "pickup" and robot.driver_phase == "confirm_pickup" and self._at_pickup(robot, order):
             allocation = self._current_allocation(order)
             if allocation is None:
                 raise ValueError("В задании не осталось мест отбора")
@@ -524,9 +529,6 @@ class WarehouseSimulation:
         return None
 
     def _current_pickup_point(self, order: Order) -> Point:
-        allocation = self._current_allocation(order)
-        if allocation:
-            return self._get_stock_item(allocation.stock_item_id).position
         return order.pickup
 
     def _location_address(self, location_id: str) -> str:
@@ -554,8 +556,7 @@ class WarehouseSimulation:
             existing_route = self._plan_route(robot.position, goal, occupied)
             if not existing_route:
                 continue
-            protected = set(self.warehouse.pickup_points + self.warehouse.shipping_points)
-            protected.update(rack.service_point for rack in self.warehouse.racks)
+            protected = set(self.warehouse.shipping_points)
             protected.update(resource.home for resource in self.warehouse.robots)
             protected.update(cell for order in self.warehouse.orders for cell in (order.pickup, order.dropoff))
             for point in existing_route[1:-1]:
@@ -577,72 +578,58 @@ class WarehouseSimulation:
         self.metrics["queue_wait"] += sum(order.status == "pending" for order in self.warehouse.orders)
         if assign_orders:
             self.assign_orders()
+        # Keep cells vacated this tick reserved until animations have finished.
         occupied = {robot.position for robot in self.warehouse.robots}
-
         exclusive = bool(self.coordination and self.coordination[0][3])
         step = coordination_step(self)
         for robot in sorted(self.warehouse.robots, key=lambda item: item.id):
+            robot.motion = "idle"
             goal = destination(self, robot)
+            if robot.stopped_by_operator or goal is None:
+                continue
             if exclusive and step and robot.id != step[0]:
-                if goal is not None and not robot.stopped_by_operator:
-                    robot.status = "waiting"
-                    robot.route = []
-                    self.metrics["waiting"] += 1
+                robot.status = "waiting"
+                self.metrics["waiting"] += 1
                 continue
-            if robot.stopped_by_operator:
-                continue
-            if robot.driver_phase == "returning":
-                occupied.discard(robot.position)
-                route = step[1] if step and step[0] == robot.id and step[1][0] not in occupied else self._plan_route(robot.position, robot.home, occupied)
-                if route:
-                    self.metrics["distance"] += 1
-                    self.motion_wait[robot.id] = 0
-                    robot.position = route[0]
-                    robot.route = route[1:]
-                    robot.status = "moving"
+            others = occupied - {robot.position}
+            order = self._get_order(robot.order_id) if robot.order_id else None
+            if step and step[0] == robot.id:
+                route = step[1]
+            elif robot.driver_phase == "to_pickup":
+                route = self._pickup_route(robot, order, others)
+            else:
+                route = self._plan_route(robot.position, goal, others)
+            moved = self._advance(robot, route, others)
+            occupied.add(robot.position)
+            if moved and step and step[0] == robot.id:
+                key, target, cells, locked = self.coordination[0]
+                if len(cells) > 1:
+                    self.coordination[0] = (key, target, cells[1:], locked)
                 else:
-                    if goal != robot.position:
-                        self.metrics["waiting"] += 1
-                        self.motion_wait[robot.id] = self.motion_wait.get(robot.id, 0) + 1
-                    robot.route = []
-                    robot.status = "waiting"
-                occupied.add(robot.position)
+                    self.coordination.pop(0)
+            if robot.driver_phase == "returning":
                 if robot.position == robot.home:
                     robot.driver_phase = "idle"
                     robot.status = "idle"
                 continue
-            if not robot.order_id:
-                continue
-            if robot.driver_phase not in ("to_pickup", "to_dropoff"):
-                continue
-            order = self._get_order(robot.order_id)
-            target = self._current_pickup_point(order) if robot.driver_phase == "to_pickup" else order.dropoff
-            if robot.position != target:
-                occupied.discard(robot.position)
-                route = step[1] if step and step[0] == robot.id and step[1][0] not in occupied else self._plan_route(robot.position, target, occupied)
-                if route:
-                    self.metrics["distance"] += 1
-                    self.motion_wait[robot.id] = 0
-                    robot.position = route[0]
-                    robot.route = route[1:]
-                    robot.status = "moving"
-                else:
-                    if goal != robot.position:
-                        self.metrics["waiting"] += 1
-                        self.motion_wait[robot.id] = self.motion_wait.get(robot.id, 0) + 1
-                    robot.route = []
-                    robot.status = "waiting"
-                occupied.add(robot.position)
-            if robot.position == target:
-                arriving_at_pickup = robot.driver_phase == "to_pickup"
-                robot.driver_phase = "confirm_pickup" if arriving_at_pickup else "confirm_delivery"
+            if robot.driver_phase == "to_pickup":
+                rack = self._pickup_rack(order)
+                if rack and robot.position == order.pickup and robot.motion != "moving":
+                    desired = self._heading(robot.position, rack.position)
+                    if robot.heading != desired:
+                        self._turn(robot, desired)
+                        continue
+                arrived = self._at_pickup(robot, order) and robot.motion == "idle"
+            else:
+                arrived = robot.position == order.dropoff
+            if arrived:
+                picking = robot.driver_phase == "to_pickup"
+                robot.driver_phase = "confirm_pickup" if picking else "confirm_delivery"
                 robot.status = "waiting"
                 robot.route = []
-                if arriving_at_pickup:
+                if picking:
                     order.status = "picking"
-                address = self._location_address(order.storage_location_id) if arriving_at_pickup and order.storage_location_id else ""
-                action = f" к адресу {address}" if address else ""
-                self._event(f"{robot.id} прибыл к точке обслуживания{action} ({target}). Требуется подтверждение водителя.", "system", robot_id=robot.id, order_id=order.id)
+                self._event(f"{robot.id} прибыл: {self._location_address(order.storage_location_id) if picking else 'Вывоз'}. Требуется подтверждение водителя.", "system", robot_id=robot.id, order_id=order.id)
 
         return self.state()
 
@@ -661,7 +648,8 @@ class WarehouseSimulation:
             item = self._get_stock_item(order.item_id)
             order = replace(order, product_id=item.product_id or item.id)
         candidates = self.manager_agent.storage_assignments(
-            order, self.warehouse.inventory, self.warehouse.robots, self._route_cost, first_stock_id
+            order, self.warehouse.inventory, self.warehouse.robots, self._route_cost, first_stock_id,
+            lambda stock: self._stock_access_points(stock)
         )
         return [
             option for option in candidates
@@ -724,7 +712,7 @@ class WarehouseSimulation:
         order.robot_id = robot.id
         order.status = "assigned"
         self._refresh_route(robot)
-        explanation = f" DeepSeek: {reason}" if reason else ""
+        explanation = f" Пояснение агента: {reason}" if reason else ""
         address_list = ", ".join(f"{self._location_address(allocation.storage_location_id)} ({allocation.quantity} шт.)" for allocation in allocations)
         self._event(
             f"Для {order.item} найдено {order.quantity} шт. по адресам {address_list}. Менеджер назначил {robot.id} и зарезервировал остаток (оценка {score}).{explanation}",
@@ -733,9 +721,93 @@ class WarehouseSimulation:
             order_id=order.id,
         )
 
+    def _pickup_rack(self, order: Order):
+        allocation = self._current_allocation(order)
+        location_id = allocation.storage_location_id if allocation else order.storage_location_id
+        location = next((loc for loc in self.warehouse.storage_locations if loc.id == location_id), None)
+        return next((rack for rack in self.warehouse.racks if location and rack.id == location.rack_id), None)
+
+    def _stock_access_points(self, stock: StockItem) -> list[Point]:
+        location = next((loc for loc in self.warehouse.storage_locations if loc.id == stock.location_id), None)
+        rack = next((rack for rack in self.warehouse.racks if location and rack.id == location.rack_id), None)
+        return self._access_points(rack) if rack else []
+
+    def _access_points(self, rack) -> list[Point]:
+        blocked = set(self.warehouse.obstacles) | {r.position for r in self.warehouse.racks} | self.zone_agent.blocked_cells
+        return [point for point in rack_pickup_faces(rack.position)
+                if 0 <= point[0] < self.warehouse.width and 0 <= point[1] < self.warehouse.height
+                and point not in blocked]
+
+    @staticmethod
+    def _heading(start: Point, end: Point) -> int:
+        return {(1, 0): 0, (0, 1): 90, (-1, 0): 180, (0, -1): 270}[(end[0] - start[0], end[1] - start[1])]
+
+    def _pickup_route(self, robot: Robot, order: Order, occupied: set[Point]):
+        rack = self._pickup_rack(order)
+        if rack is None:
+            return None
+        candidates = []
+        for point in self._access_points(rack):
+            if point in occupied:
+                continue
+            route = self._plan_route(robot.position, point, occupied)
+            if route is None:
+                continue
+            heading, turns, current = robot.heading, 0, robot.position
+            for cell in [*route, rack.position]:
+                desired = self._heading(current, cell)
+                delta = (desired - heading) % 360
+                turns += min(delta, 360 - delta) // 90
+                heading, current = desired, cell
+            candidates.append((len(route) + turns, point != order.pickup, point, route))
+        if not candidates:
+            return None
+        _, _, order.pickup, route = min(candidates)
+        return route
+
+    def _at_pickup(self, robot: Robot, order: Order) -> bool:
+        rack = self._pickup_rack(order)
+        return bool(rack and robot.position == order.pickup and robot.position in self._access_points(rack)
+                    and robot.heading == self._heading(robot.position, rack.position) and robot.motion == "idle")
+
+    def _turn(self, robot: Robot, desired: int) -> None:
+        delta = (desired - robot.heading) % 360
+        robot.heading = (robot.heading + (90 if delta <= 180 else -90)) % 360
+        robot.motion = "turning"
+        robot.status = "moving"
+        self.motion_wait[robot.id] = 0
+
+    def _advance(self, robot: Robot, route, occupied: set[Point]) -> bool:
+        robot.route = route or []
+        if route:
+            cell = route[0]
+            blocked = set(self.warehouse.obstacles) | {r.position for r in self.warehouse.racks} | self.zone_agent.blocked_cells | occupied
+            if cell not in blocked and sum(abs(a-b) for a, b in zip(robot.position, cell)) == 1:
+                desired = self._heading(robot.position, cell)
+                if robot.heading != desired:
+                    self._turn(robot, desired)
+                    return False
+                robot.position = cell
+                robot.route = route[1:]
+                robot.motion = "moving"
+                robot.status = "moving"
+                self.metrics["distance"] += 1
+                self.motion_wait[robot.id] = 0
+                return True
+        robot.status = "waiting"
+        if route is None:
+            self.metrics["waiting"] += 1
+            self.motion_wait[robot.id] = self.motion_wait.get(robot.id, 0) + 1
+        return False
+
     def _route_cost(self, start: Point, goal: Point, occupied: set[Point]) -> int | None:
-        route = self._plan_route(start, goal, occupied)
-        return None if route is None else len(route)
+        # Assignment evaluates every rack side using the same BFS as movement.
+        racks = {rack.position: rack for rack in self.warehouse.racks}
+        starts = self._access_points(racks[start]) if start in racks else [start]
+        goals = self._access_points(racks[goal]) if goal in racks else [goal]
+        costs = [len(route) for a in starts for b in goals if a not in occupied and b not in occupied
+                 if (route := self._plan_route(a, b, occupied)) is not None]
+        return min(costs) if costs else None
 
     def _plan_route(
         self,
@@ -749,7 +821,7 @@ class WarehouseSimulation:
             goal=goal,
             width=self.warehouse.width,
             height=self.warehouse.height,
-            blocked=set(self.warehouse.obstacles) | self.zone_agent.blocked_cells | (extra_blocked or set()),
+            blocked=set(self.warehouse.obstacles) | {rack.position for rack in self.warehouse.racks} | self.zone_agent.blocked_cells | (extra_blocked or set()),
             occupied=occupied,
         )
 

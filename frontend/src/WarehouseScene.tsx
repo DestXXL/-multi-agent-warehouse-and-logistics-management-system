@@ -90,7 +90,7 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
           {Array.from({ length: w.width }, (_, x) => <text key={x} className="scene-axis" x={x * unit + 32} y="-12" textAnchor="middle">{x}</text>)}
           {Array.from({ length: w.height }, (_, y) => <text key={y} className="scene-axis" x="-14" y={y * unit + 36} textAnchor="middle">{y}</text>)}
           {w.obstacles.filter(p => !w.racks.some(r => r.position[0] === p[0] && r.position[1] === p[1])).map(p => <rect key={`wall-${p}`} x={p[0] * unit + 3} y={p[1] * unit + 3} width="58" height="58" fill="var(--map-wall)" />)}
-          {(['pickup', 'shipping'] as const).flatMap(kind => w[kind === 'pickup' ? 'pickup_points' : 'shipping_points'].map(p => <g key={`${kind}-${p}`} className={`scene-zone ${kind}`}><rect x={p[0] * unit + 4} y={p[1] * unit + 4} width="56" height="56" rx="4" /><text x={p[0] * unit + 32} y={p[1] * unit + 36} textAnchor="middle">{kind === 'pickup' ? 'Забор' : 'Вывоз'}</text></g>))}
+          {w.shipping_points.map(p => <g key={`shipping-${p}`} className="scene-zone shipping"><rect x={p[0] * unit + 4} y={p[1] * unit + 4} width="56" height="56" rx="4" /><text x={p[0] * unit + 32} y={p[1] * unit + 36} textAnchor="middle">Вывоз</text></g>)}
           {target && <g className="scene-target"><rect x={target[0] * unit + 5} y={target[1] * unit + 5} width="54" height="54" rx="4" /><text x={target[0] * unit + 32} y={target[1] * unit + 16} textAnchor="middle">Цель</text></g>}
           {route && route.route.length > 0 && <polyline className="scene-route" points={[route.position, ...route.route].map(center).join(' ')} markerEnd={`url(#${id}-arrow)`} />}
           {w.racks.map(rack => {
@@ -100,8 +100,9 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
               onMouseEnter={() => setHovered(rack.id)} onMouseLeave={() => setHovered(null)} onFocus={() => setHovered(rack.id)} onBlur={() => setHovered(null)} onClick={() => onRack(rack.id)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRack(rack.id) } }}>
               <rect className="rack-hit-area" x={rack.position[0] * unit + 2} y={rack.position[1] * unit + 2} width={60} height={60} rx="3" />
               <rect className="rack-deck" x={x} y={y} width={rw} height={rd} />
-              {(locations.get(rack.id) ?? []).filter(l => l.level === visibleLevel).flatMap(l => l.items.flatMap(item => item.unit_placements.map((box, index) => <rect key={`${l.id}-${item.id}-${index}`} className="scene-package" x={x + (l.x_mm + box.x_mm) * ratio} y={y + (l.y_mm + box.y_mm) * ratio} width={box.length_mm * ratio} height={box.width_mm * ratio}><title>{`${item.name} · ${formatDimensions(box.length_mm, box.width_mm, box.height_mm)}`}</title></rect>)))}
+              {(locations.get(rack.id) ?? []).filter(l => l.level === visibleLevel).flatMap(l => l.items.flatMap(item => item.unit_placements.map((box, index) => <rect key={`${l.id}-${item.id}-${index}`} className={`scene-package ${w.robots.some(robot => robot.driver_phase === 'confirm_pickup' && robot.pickup_location_id === l.id && robot.pickup_product_id === item.id) ? 'package-picking' : ''}`} x={x + (l.x_mm + box.x_mm) * ratio} y={y + (l.y_mm + box.y_mm) * ratio} width={box.length_mm * ratio} height={box.width_mm * ratio}><title>{`${item.name} · ${formatDimensions(box.length_mm, box.width_mm, box.height_mm)}`}</title></rect>)))}
               <path className="rack-frame" d={`M ${x} ${y} H ${x + rw} V ${y + rd} H ${x} Z M ${x + rw / 2} ${y} V ${y + rd}`} />
+              <path className="rack-end-panels" d={`M ${x} ${y} V ${y + rd} M ${x + rw} ${y} V ${y + rd}`} />
               <text className="scene-rack-label" style={{ fontSize: labelSize }} x={x + rw / 2} y={y + rd + labelSize} textAnchor="middle">{rack.id}</text>
             </g>
           })}
@@ -110,20 +111,29 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
             return <g key={`aisle-${point}`} className={`scene-aisle ${aisle.fitsForklift ? '' : 'too-narrow'}`}><rect x={x * unit + 8} y={y * unit + 22} width="48" height="20" rx="3" /><text x={x * unit + 32} y={y * unit + 36} textAnchor="middle">{aisle.widthM.toLocaleString('ru', { maximumFractionDigits: 1 })} м</text><title>{`Расчётный проезд: ${aisle.widthM.toFixed(1)} м. ${aisle.fitsForklift ? 'Шире корпуса погрузчика' : 'Уже корпуса погрузчика'}. Демо-масштаб, не проверка проходимости.`}</title></g>
           })}
           {w.closed_cells.map(p => <g key={`closed-${p}`}><rect x={p[0] * unit + 2} y={p[1] * unit + 2} width="60" height="60" fill={`url(#${id}-closed)`} stroke="#e66d75" /><text x={p[0] * unit + 32} y={p[1] * unit + 39} textAnchor="middle" fill="#e66d75" fontSize="24">!</text></g>)}
-          {w.robots.map(robot => {
-            const rw = scale.forkliftWidthM * 1000 * ratio, rh = scale.forkliftLengthM * 1000 * ratio
-            const next = robot.route[0]
-            const angle = !next ? 0 : next[0] > robot.position[0] ? 90 : next[0] < robot.position[0] ? -90 : next[1] > robot.position[1] ? 180 : 0
-            return <g key={robot.id} role="button" tabIndex={0} aria-label={`Погрузчик ${robot.id}, выбрать`} aria-pressed={robot.id === selectedRobot} className={`scene-robot ${robot.status} ${robot.id === selectedRobot ? 'selected' : ''}`} transform={`translate(${robot.position[0] * unit + 32} ${robot.position[1] * unit + 32})`} onClick={() => onRobot(robot.id)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRobot(robot.id) } }}>
-              <circle className="robot-hit-area" r={Math.max(22, rh / 2 + 5)} />
-              <g transform={`rotate(${angle})`}><rect className="robot-body" x={-rw / 2} y={-rh / 2} width={rw} height={rh * .75} rx="3" /><rect className="robot-cabin" x={-rw * .32} y={-rh * .22} width={rw * .64} height={rh * .28} rx="2" /><path className="robot-forks" d={`M ${-rw * .3} ${rh * .25} V ${rh / 2} M ${rw * .3} ${rh * .25} V ${rh / 2}`} />{robot.carrying_item && <rect className="scene-package" x={-rw * .4} y={rh * .2} width={rw * .8} height={rh * .3} />}</g>
-              <text className="scene-robot-label" y={rh / 2 + 18} textAnchor="middle">{robot.id}</text>
-            </g>
-          })}
+          {w.robots.map(robot => <Forklift key={robot.id} robot={robot} unit={unit} rw={scale.forkliftWidthM * 1000 * ratio} rh={scale.forkliftLengthM * 1000 * ratio} selected={robot.id === selectedRobot} onSelect={() => onRobot(robot.id)} />)}
         </g>
       </svg>
-      {tip && <div className="scene-tooltip" role="status"><strong>{tip.id} <span>{tip.rack_type_title}</span></strong><p>{formatDimensions(tip.width_mm, tip.depth_mm, tip.height_mm)} · {tip.levels} ярусов</p><p>{formatPercent(occupancyPercent(tip.occupied_locations, tip.location_count))}% мест занято · {tip.free_locations} свободных мест · {tip.service_point ? 'Есть точка обслуживания' : 'Нет точки обслуживания'}</p></div>}
+      {tip && <div className="scene-tooltip" role="status"><strong>{tip.id} <span>{tip.rack_type_title}</span></strong><p>{formatDimensions(tip.width_mm, tip.depth_mm, tip.height_mm)} · {tip.levels} ярусов</p><p>{formatPercent(occupancyPercent(tip.occupied_locations, tip.location_count))}% мест занято · {tip.free_locations} свободных мест · Подъезд со стороны полок: сверху или снизу</p></div>}
     </div>
     <div className="scene-caption"><span>Перетащите карту · + / − для масштаба</span><span>Грузы: ярус {visibleLevel} · 1 клетка ≈ {scale.cellStepM.toLocaleString('ru')} м</span></div>
   </div>
+}
+
+
+function Forklift({ robot, unit, rw, rh, selected, onSelect }: { robot: Robot; unit: number; rw: number; rh: number; selected: boolean; onSelect: () => void }) {
+  const [rotation, setRotation] = useState(robot.heading + 90)
+  useEffect(() => {
+    setRotation(current => current + ((robot.heading + 90 - current) % 360 + 540) % 360 - 180)
+  }, [robot.heading])
+  return <g role="button" tabIndex={0} aria-label={`Погрузчик ${robot.id}, выбрать`} aria-pressed={selected} data-robot={robot.id} data-heading={robot.heading} data-motion={robot.motion} className={`scene-robot ${robot.status} ${selected ? 'selected' : ''} ${robot.driver_phase === 'confirm_pickup' ? 'picking' : ''}`} transform={`translate(${robot.position[0] * unit + 32} ${robot.position[1] * unit + 32})`} onClick={onSelect} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect() } }}>
+    <circle className="robot-hit-area" r={Math.max(22, rh / 2 + 5)} />
+    <g className="robot-orientation" style={{ transform: `rotate(${rotation}deg)` }}>
+      <rect className="robot-body" x={-rw / 2} y={-rh * .12} width={rw} height={rh * .62} rx="3" />
+      <rect className="robot-cabin" x={-rw * .32} y={rh * .08} width={rw * .64} height={rh * .25} rx="2" />
+      <g className="robot-loader"><path className="robot-forks" d={`M ${-rw * .48} ${-rh * .12} H ${rw * .48} M ${-rw * .32} ${-rh * .12} V ${-rh * .5} M ${rw * .32} ${-rh * .12} V ${-rh * .5}`} />
+      {robot.carrying_item && <rect className="scene-package robot-cargo" x={-rw * .42} y={-rh * .46} width={rw * .84} height={rh * .3} />}</g>
+    </g>
+    <text className="scene-robot-label" y={rh / 2 + 18} textAnchor="middle">{robot.id}</text>
+  </g>
 }

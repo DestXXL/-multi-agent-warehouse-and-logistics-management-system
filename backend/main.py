@@ -1,7 +1,6 @@
 """HTTP and WebSocket API for the virtual warehouse operator interface."""
 
 import asyncio
-import os
 from typing import Literal
 
 import httpx
@@ -13,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from backend import dispatch
 from backend.llm import consult
+from backend.harness import Settings, harness_for
 from backend.planning import compare_shift, plan_zone, planning_pass
 from backend.simulation import WarehouseSimulation
 from backend.layout import Layout, from_warehouse
@@ -20,20 +20,20 @@ from backend.rack_types import RACK_TYPES, generated_cargo_dimensions, pack_pack
 
 
 simulation = WarehouseSimulation()
-kodikrouter_key = os.getenv("KODIKROUTER_API_KEY", "").strip()
-simulation.model_available = bool(kodikrouter_key)
-simulation.dispatch_mode = "model" if kodikrouter_key else "rules"
+harness = harness_for(simulation)
+simulation.model_available = bool(harness.key)
+simulation.dispatch_mode = "rules"
 connections: set[WebSocket] = set()
 comparison_lock = asyncio.Lock()
 
 
 def model_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(headers={"Authorization": f"Bearer {kodikrouter_key}"})
+    return harness.client()
 
 
 class CreateOrderRequest(BaseModel):
     item: str = Field(min_length=1, max_length=80)
-    pickup: tuple[int, int]
+    pickup: tuple[int, int] = (0, 0)  # Legacy input; storage determines pickup.
     dropoff: tuple[int, int]
     product_id: str | None = Field(default=None, min_length=1, max_length=80)
     quantity: int = Field(default=1, ge=1, le=1_000_000)
@@ -64,7 +64,7 @@ class ResizeProductRequest(BaseModel):
 
 
 class DispatchModeRequest(BaseModel):
-    mode: Literal["rules", "model"]
+    mode: Literal["rules", "model", "demo"]
 
 
 class DispatchQuestion(BaseModel):
@@ -74,19 +74,23 @@ class DispatchQuestion(BaseModel):
 
 
 async def simulation_loop() -> None:
+    loop = asyncio.get_running_loop()
     while True:
+        started = loop.time()
         if simulation.running:
             state = simulation.tick(assign_orders=simulation.dispatch_mode == "rules")
             if simulation.dispatch_mode == "rules" and await plan_zone(simulation, None):
                 state = simulation.state()
             await broadcast(state)
-        await asyncio.sleep(simulation.TICK_SECONDS)
+        # Include calculation and broadcast time in the tick interval.
+        elapsed = loop.time() - started
+        await asyncio.sleep(max(0.0, simulation.TICK_SECONDS - elapsed))
 
 
 async def assignment_loop() -> None:
     async with model_client() as client:
         while True:
-            if simulation.dispatch_mode == "model" and await planning_pass(simulation, client):
+            if simulation.dispatch_mode in ("model", "demo") and await planning_pass(simulation, client):
                 await publish_state()
             await asyncio.sleep(simulation.TICK_SECONDS)
 
@@ -111,8 +115,7 @@ async def publish_state() -> dict:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     tasks = [asyncio.create_task(simulation_loop())]
-    if kodikrouter_key:
-        tasks.append(asyncio.create_task(assignment_loop()))
+    tasks.append(asyncio.create_task(assignment_loop()))
     try:
         yield
     finally:
@@ -138,13 +141,50 @@ async def get_state() -> dict:
     return simulation.state()
 
 
+@app.get("/api/dispatch/settings")
+async def get_ai_settings() -> dict:
+    return harness.public()
+
+
+@app.put("/api/dispatch/settings")
+async def update_ai_settings(request: Settings) -> dict:
+    try:
+        harness.configure(request)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return await publish_state()
+
+
+@app.get("/api/dispatch/history/{trace_id}")
+async def get_ai_trace(trace_id: str) -> dict:
+    row = next((row for row in harness.history if row["id"] == trace_id), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Обращение уже удалено из ограниченной истории")
+    return harness.safe(row)
+
+
+@app.post("/api/dispatch/test")
+async def test_ai_connection() -> dict:
+    if not harness.key:
+        raise HTTPException(status_code=409, detail="Задайте LLM_API_KEY или KODIKROUTER_API_KEY на сервере и перезапустите его.")
+    async with model_client() as client:
+        result = await harness.consult(client, simulation, "operator", {
+            "question": "Подтверди получение запроса одной короткой фразой", "facts": [],
+        }, probe=True)
+    harness.resolve(result, "Проверка подключения; склад не изменён")
+    await publish_state()
+    return {"ok": result is not None, "state": harness.public()}
+
+
 @app.post("/api/dispatch/mode")
 async def change_mode(request: DispatchModeRequest) -> dict:
     if request.mode == "model" and not simulation.model_available:
-        raise HTTPException(status_code=409, detail="Укажите ключ KodikRouter при запуске backend.")
+        raise HTTPException(status_code=409, detail="Укажите LLM_API_KEY или KODIKROUTER_API_KEY на сервере.")
     if request.mode != simulation.dispatch_mode:
+        harness.version += 1
+        harness.seen.clear()
         simulation.dispatch_mode = request.mode
-        simulation._event("Режим планирования: " + ("модель." if request.mode == "model" else "правила."), "operator")
+        simulation._event("Режим планирования: " + {"model": "модель.", "rules": "правила.", "demo": "демонстрация без LLM."}[request.mode], "operator")
     return await publish_state()
 
 
@@ -154,7 +194,8 @@ async def ask_dispatch(request: DispatchQuestion) -> dict:
     revision = simulation.revision
     tick = simulation.tick_count
     answer = None
-    if simulation.dispatch_mode == "model" and simulation.model_available:
+    answer_mode = simulation.dispatch_mode
+    if simulation.dispatch_mode in ("model", "demo"):
         role = "robot" if any(robot.id == request.target for robot in simulation.warehouse.robots) else "operator"
         async with model_client() as client:
             result = await consult(client, simulation, role, {
@@ -165,17 +206,21 @@ async def ask_dispatch(request: DispatchQuestion) -> dict:
             })
         if result and not result[0]:
             answer = result[1]
-    return {"answer": answer, "facts": facts, "tick": tick, "revision": revision}
+            harness.resolve(result, "Ответ показан пользователю; склад не изменялся")
+    await publish_state()
+    return {"answer": answer, "facts": facts, "tick": tick, "revision": revision,
+            "source": answer_mode, "error": harness.last_error if answer is None and answer_mode != "rules" else None}
 
 
 @app.post("/api/dispatch/compare")
 async def compare_dispatch() -> dict:
-    if not simulation.model_available:
-        raise HTTPException(status_code=409, detail="Для сравнения нужен ключ KodikRouter.")
+    if not simulation.model_available and simulation.dispatch_mode != "demo":
+        raise HTTPException(status_code=409, detail="Выберите деморежим или подключите модель.")
     if comparison_lock.locked():
         raise HTTPException(status_code=409, detail="Сравнение уже запущено.")
     async with comparison_lock, model_client() as client:
-        rules, model = await asyncio.gather(compare_shift(None, "rules"), compare_shift(client, "model"))
+        rules, model = await asyncio.gather(compare_shift(None, "rules"), compare_shift(client, "demo" if simulation.dispatch_mode == "demo" else "model", harness))
+    await publish_state()
     return {"rules": rules, "model": model}
 
 
@@ -245,7 +290,8 @@ async def reopen_aisles() -> dict:
 
 @app.post("/api/orders")
 async def create_order(request: CreateOrderRequest) -> dict:
-    for point in (request.pickup, request.dropoff):
+    result = None
+    for point in (request.dropoff,):
         x, y = point
         if not (0 <= x < simulation.warehouse.width and 0 <= y < simulation.warehouse.height):
             raise HTTPException(status_code=422, detail=f"Точка {point} находится вне карты склада")
@@ -255,7 +301,8 @@ async def create_order(request: CreateOrderRequest) -> dict:
         dimensions = None if request.length_mm is None else (request.length_mm, request.width_mm, request.height_mm)
         storage_plan = None
         storage_decision = None
-        if request.product_id is None and simulation.dispatch_mode == "model":
+        if request.product_id is None and simulation.dispatch_mode in ("model", "demo"):
+            storage_mode, storage_warehouse = simulation.dispatch_mode, simulation.warehouse
             actual_dimensions = dimensions or generated_cargo_dimensions(simulation.next_order_number)
             proposal = dispatch.storage_options(simulation, actual_dimensions, request.quantity, request.dropoff)
             if len(proposal.options) == 1:
@@ -269,7 +316,8 @@ async def create_order(request: CreateOrderRequest) -> dict:
                         "revision": proposal.revision, "options": shortlist,
                         "quantity": request.quantity, "dimensions_mm": actual_dimensions,
                     })
-                if proposal.revision != simulation.revision or simulation.dispatch_mode != "model":
+                if proposal.revision != simulation.revision or simulation.dispatch_mode != storage_mode or simulation.warehouse is not storage_warehouse:
+                    harness.resolve(result, "Отклонено: состояние склада или режим изменились")
                     raise HTTPException(status_code=409, detail="Состояние склада изменилось. Повторите создание заказа.")
                 if result and len(result[0]) == 1:
                     storage_plan = proposal.options.get(result[0][0])
@@ -277,15 +325,19 @@ async def create_order(request: CreateOrderRequest) -> dict:
                     simulation.metrics["fallbacks"] += 1
                     storage_decision = ([], "fallback", "Модель не выбрала допустимое размещение. Применены правила.")
                 else:
-                    storage_decision = (result[0], "model", f"ИИ выбрал {result[0][0]}. Данные о расстоянии, запасе и прошлых отборах рассчитаны сервером.")
+                    harness.resolve(result, "План размещения проверен; ожидается создание заказа")
+                    storage_decision = (result[0], "demo" if simulation.dispatch_mode == "demo" else "model", f"Выбран {result[0][0]}. Данные о расстоянии, запасе и прошлых отборах рассчитаны сервером.")
         state = simulation.add_order(
             request.item, request.pickup, request.dropoff, request.product_id, request.quantity, dimensions,
             priority=request.priority, due_in_ticks=request.due_in_ticks, storage_plan=storage_plan,
         )
         if storage_decision:
+            if storage_plan is not None and len(proposal.options) > 1:
+                harness.resolve(result, "Принято: заказ создан и план размещения применён")
             dispatch.record(simulation, proposal, *storage_decision)
             state = simulation.state()
     except ValueError as error:
+        harness.resolve(result, "Отклонено: создание заказа не прошло проверку склада")
         raise HTTPException(status_code=409, detail=str(error)) from error
     await broadcast(state)
     return state
@@ -393,7 +445,7 @@ async def apply_layout(layout: Layout) -> dict:
         if item.location_id in replacement_locations:
             location = replacement_by_id[item.location_id]
             rack = next(rack for rack in replacement.racks if rack.id == location.rack_id)
-            item.position = rack.service_point or rack.position
+            item.position = rack.position
             item.placement_x_mm = location.x_mm
             item.placement_y_mm = location.y_mm
             if item.id in proposed_placements:
