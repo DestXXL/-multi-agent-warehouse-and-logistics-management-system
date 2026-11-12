@@ -22,6 +22,10 @@ export type Robot = {
   driver_phase: 'idle' | 'offered' | 'to_pickup' | 'confirm_pickup' | 'to_dropoff' | 'confirm_delivery' | 'returning'
   can_report_obstacle: boolean
   route_version: number
+  heading: number
+  motion: 'idle' | 'turning' | 'moving'
+  pickup_location_id: string | null
+  pickup_product_id: string | null
 }
 
 export type Order = {
@@ -347,7 +351,7 @@ function App() {
           </div>
 
           {state.dispatch?.decisions[0] && <section className="panel latest-decision" aria-live="polite">
-            <div><strong>Последнее решение · {state.dispatch.decisions[0].source === 'model' ? 'ИИ' : state.dispatch.decisions[0].source === 'fallback' ? 'резервные правила' : 'правила'}</strong>
+            <div><strong>Последнее решение · {state.dispatch.decisions[0].source === 'demo' ? 'демонстрация без LLM' : state.dispatch.decisions[0].source === 'model' ? 'ИИ' : state.dispatch.decisions[0].source === 'fallback' ? 'резервные правила' : 'правила'}</strong>
               <p>{state.dispatch.decisions[0].source === 'model' && state.dispatch.decisions[0].batches
                 ? `ИИ выбрал ${state.dispatch.decisions[0].selected_batch}. Факты маршрута и оценки рассчитаны сервером.`
                 : state.dispatch.decisions[0].reason}</p>
@@ -365,7 +369,7 @@ function App() {
             <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'fleet'} onClick={() => setActivePanel('fleet')}><i>✣</i>Техника<b>{robots.length}</b></button>
             <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'inventory'} onClick={() => setActivePanel('inventory')}><i>▧</i>Запасы<b>{inventory.length}</b></button>
             <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'control'} onClick={() => setActivePanel('control')}><i>▶</i>Управление</button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'agents'} onClick={() => setActivePanel('agents')}><i>◎</i>Агенты</button>
+            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'agents'} onClick={() => setActivePanel('agents')}><i>◎</i>ИИ и агенты</button>
             <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'activity'} onClick={() => setActivePanel('activity')}><i>≋</i>События<b>{visibleEvents.length}</b></button>
             {selectedRackData || selectedRobot || selectedOrder ? <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'object'} onClick={() => setActivePanel('object')}><i>⌕</i>Выбранный объект</button> : null}
           </nav>
@@ -376,7 +380,7 @@ function App() {
               <div className="map-actions"><span className="map-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
             </div>
             <details className="scale-settings"><summary>Масштаб и габариты техники</summary><div className="map-dimension-controls"><label title="Расстояние между центрами соседних клеток">Шаг сетки <span><input type="number" min="0.5" max="20" step="0.1" value={physicalScaleDraft.cellStepM} onChange={event => updatePhysicalScale('cellStepM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, cellStepM: String(physicalScale.cellStepM) }))} /> м</span></label><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Примерный шаг сетки · ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div></details>
-            <div className="map-legend"><span><i className="legend-dot robot-dot" /> Погрузчик</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box pickup-dot" /> Комплектация</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> {highlightedRobotId ? `Маршрут ${highlightedRobotId}` : 'Маршрут по выбору'}</span><span><i className="legend-box aisle-dot" /> Проезд · м</span><span className="aisle-warning-legend">Красный – уже погрузчика</span>{highlightedRobotId && <button className="clear-route-button" type="button" onClick={() => setHighlightedRobotId(null)}>Снять выделение</button>}</div>
+            <div className="map-legend"><span><i className="legend-dot robot-dot" /> Погрузчик</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> {highlightedRobotId ? `Маршрут ${highlightedRobotId}` : 'Маршрут по выбору'}</span><span><i className="legend-box aisle-dot" /> Проезд · м</span><span className="aisle-warning-legend">Красный – уже погрузчика</span>{highlightedRobotId && <button className="clear-route-button" type="button" onClick={() => setHighlightedRobotId(null)}>Снять выделение</button>}</div>
             <WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={highlightedRobotId} onRack={selectRack} onRobot={selectRobot} />
           </section>
 
@@ -425,7 +429,7 @@ function App() {
           </section>
 
           <section className="panel agent-panel" role={activePanel === 'agents' ? 'dialog' : undefined} aria-modal={activePanel === 'agents' ? true : undefined} aria-hidden={activePanel !== 'agents'} aria-labelledby="agents-panel-title">
-            <div className="panel-heading compact-heading"><div><h2 id="agents-panel-title">Координация агентов</h2></div></div>
+            <div className="panel-heading compact-heading"><div><h2 id="agents-panel-title">ИИ и агенты</h2></div></div>
             {state.dispatch ? <DispatchPanel api={API} dispatch={state.dispatch} disabled={busy || connection !== 'online'}
               onMode={mode => void command('/api/dispatch/mode', { mode })}
               targets={[...warehouse!.orders.map(order => order.id), ...robots.map(robot => robot.id)]} />

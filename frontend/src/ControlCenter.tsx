@@ -44,7 +44,7 @@ export function ObjectInspector({ rack, robot, order, phase, status, isOpen, onC
         </svg>
         <span>{rack.rack_type_title}</span>
       </div>
-      <dl className="inspector-specs"><dt>Габариты</dt><dd>{formatDimensions(rack.width_mm, rack.depth_mm, rack.height_mm)}</dd><dt>Ярусы / места</dt><dd>{rack.levels} / {rack.location_count}</dd><dt>Коробок</dt><dd>{rack.package_count}</dd><dt>Площадь свободных полок</dt><dd>{formatSquareMillimeters(rack.free_surface_mm2)}</dd><dt>Точка обслуживания (клетка)</dt><dd>{rack.service_point ? rack.service_point.join(' · ') : 'Нет точки'}</dd></dl>
+      <dl className="inspector-specs"><dt>Габариты</dt><dd>{formatDimensions(rack.width_mm, rack.depth_mm, rack.height_mm)}</dd><dt>Ярусы / места</dt><dd>{rack.levels} / {rack.location_count}</dd><dt>Коробок</dt><dd>{rack.package_count}</dd><dt>Площадь свободных полок</dt><dd>{formatSquareMillimeters(rack.free_surface_mm2)}</dd><dt>Подъезд</dt><dd>Со стороны полок: сверху или снизу</dd></dl>
       <div className="inspector-occupancy"><span>Занято мест <b>{rack.occupied_locations} / {rack.location_count}</b></span><progress max="100" value={occupancyPercent(rack.occupied_locations, rack.location_count)} /></div>
       <button className="primary-button" onClick={onRackDetails}>Содержимое по ярусам ↗</button>
     </> : robot ? <>

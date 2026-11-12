@@ -88,7 +88,7 @@ class DriverWorkflowTests(unittest.TestCase):
         self.assertEqual(self.robot.position, (0, 1))
         self.sim.reopen_aisles()
         self.reach('confirm_pickup')
-        self.assertEqual(self.robot.position, (3, 1))
+        self.assertEqual(self.robot.position, (4, 0))
 
     def test_stale_task_is_rejected(self):
         with self.assertRaises(ValueError):

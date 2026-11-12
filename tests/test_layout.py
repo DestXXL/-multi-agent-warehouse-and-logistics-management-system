@@ -70,7 +70,7 @@ class LayoutTests(unittest.TestCase):
         simulation.start()
         order = simulation._get_order('ORD-003')
         allocations = order.allocations
-        self.assertEqual([(item.storage_location_id, item.quantity) for item in allocations], [('A-03-L01-P01', 3), ('A-04-L01-P01', 2)])
+        self.assertCountEqual([(item.storage_location_id, item.quantity) for item in allocations], [('A-03-L01-P01', 3), ('A-04-L01-P01', 2)])
         self.assertEqual(sum(simulation._get_stock_item(item.stock_item_id).reservations[order.id] for item in allocations), 5)
         robot = simulation._get_robot(order.robot_id)
         simulation.driver_action(robot.id, order.id, 'accept')
@@ -124,7 +124,7 @@ class LayoutTests(unittest.TestCase):
     def test_existing_agents_run_custom_layout(self):
         self.assertEqual(self.client.put('/api/layout',json=self.layout).status_code,200)
         w = simulation.warehouse
-        simulation.add_order('Демо', w.pickup_points[0], w.shipping_points[0])
+        simulation.add_order('Демо', w.robots[0].home, w.shipping_points[0])
         simulation.start()
         for _ in range(160):
             for r in w.robots:

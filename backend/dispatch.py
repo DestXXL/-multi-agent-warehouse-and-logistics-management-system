@@ -136,7 +136,7 @@ def storage_options(sim, dimensions, quantity, dropoff: Point) -> Proposal:
             if allocation.picked:
                 demand[allocation.storage_location_id] += allocation.quantity
     distances = {
-        key: sim._route_cost(rack.service_point or rack.position, dropoff, set())
+        key: sim._route_cost(rack.position, dropoff, set())
         for key, rack in racks.items()
     }
     reachable = [location for location in locations if distances[location.rack_id] is not None]
@@ -289,10 +289,6 @@ def coordination_step(sim):
         sim.coordination = None
         sim._event("План разъезда отменён: следующая клетка недоступна.", "zone")
         return None
-    if len(route) > 1:
-        sim.coordination[0] = (robot_id, goal, route[1:], exclusive)
-    else:
-        sim.coordination.pop(0)
     return robot_id, route
 
 
@@ -307,7 +303,14 @@ def record(sim, proposal: Proposal, choice: list[str], source: str, reason: str,
 
 def operator_facts(sim, target: str | None, closure: Point | None) -> list[str]:
     warehouse = sim.warehouse
-    facts = []
+    facts = [f"Склад: {'работает' if sim.running else 'на паузе'}, такт {sim.tick_count}, режим {sim.dispatch_mode}."]
+    for order in warehouse.orders:
+        if order.status in ("pending", "cancelled") or target and order.id != target:
+            continue
+        facts.append(f"{order.id}: статус {order.status}, приоритет {order.priority}, исполнитель {order.robot_id or 'не назначен'}, количество {order.quantity}.")
+        if len(facts) >= 9:
+            break
+    pending_count = 0
     for order in sim._pending_orders():
         if target and order.id != target:
             continue
@@ -327,8 +330,9 @@ def operator_facts(sim, target: str | None, closure: Point | None) -> list[str]:
             reason = "есть допустимое назначение, симуляция приостановлена" if sim.tick_count else "есть допустимое назначение, симуляция ещё не запущена"
         else:
             reason = "есть допустимое назначение, заказ ожидает планирования"
-        facts.append(f"{order.id}: {reason}.")
-        if len(facts) == 8:
+        facts.append(f"{order.id}: {reason}; приоритет {order.priority}, срок в тактах {order.due_tick if order.due_tick is not None else 'не задан'}.")
+        pending_count += 1
+        if pending_count == 8:
             break
     for robot in warehouse.robots:
         if target and robot.id != target:
@@ -341,7 +345,7 @@ def operator_facts(sim, target: str | None, closure: Point | None) -> list[str]:
             detail = f"ожидает доступного пути {sim.motion_wait[robot.id]} тактов"
         else:
             detail = f"координаты {robot.position}, осталось клеток маршрута: {len(robot.route)}"
-        facts.append(f"{robot.id}: {detail}.")
+        facts.append(f"{robot.id}: {detail}; задание {robot.order_id or 'отсутствует'}, фаза {robot.driver_phase}, загрузка {robot.basket_load}/{robot.basket_capacity}.")
     if closure is not None:
         for robot in warehouse.robots:
             if closure not in robot.route:
@@ -353,7 +357,7 @@ def operator_facts(sim, target: str | None, closure: Point | None) -> list[str]:
             facts.append(f"Перекрытие {closure} затронет {robot.order_id or robot.id}: {effect}.")
         if not any(line.startswith("Перекрытие") for line in facts):
             facts.append(f"Клетка {closure} отсутствует на текущих маршрутах.")
-    if target and not facts:
+    if target and len(facts) == 1:
         order = next((order for order in warehouse.orders if order.id == target), None)
         facts.append(f"{target}: статус {order.status}." if order else f"{target}: заказ или техника не найдены.")
     return facts

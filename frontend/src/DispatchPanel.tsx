@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import './dispatch.css'
+import AIControl, { type AIState } from './AIControl'
 
 type Metrics = {
   completed: number
@@ -13,13 +14,15 @@ type Metrics = {
 }
 
 export type DispatchState = {
-  mode: 'rules' | 'model'
+  mode: 'rules' | 'model' | 'demo'
+  ai?: AIState
+  agents?: { id: string; task: string | null; status: string; llm: boolean }[]
   model_available: boolean
   metrics: Metrics
   decisions: {
     role: string
     revision: number
-    source: 'model' | 'fallback' | 'rules'
+    source: 'model' | 'fallback' | 'rules' | 'demo'
     reason: string
     selected: string[]
     options: Record<string, unknown>
@@ -29,8 +32,8 @@ export type DispatchState = {
   }[]
 }
 
-type Answer = { answer: string | null; facts: string[]; tick: number }
-type Comparison = { rules: Metrics; model: Metrics }
+type Answer = { answer: string | null; facts: string[]; tick: number; source?: string; error?: string }
+type Comparison = { rules: Metrics & {elapsed_ms: number}; model: Metrics & {source: string; elapsed_ms: number} }
 
 const metrics: [keyof Metrics, string][] = [
   ['completed', 'Выполнено заказов'], ['ticks', 'Такты смены'], ['distance', 'Пройдено клеток'],
@@ -38,7 +41,7 @@ const metrics: [keyof Metrics, string][] = [
   ['requests', 'Запросы к модели'], ['tokens', 'Токены по отчёту провайдера'], ['fallbacks', 'Переходы на правила'],
 ]
 const roles: Record<string, string> = { manager: 'Назначение', zone: 'Проезды', storage: 'Размещение' }
-const sources = { model: 'Модель', rules: 'Правила', fallback: 'Резервный алгоритм' }
+const sources = { demo: 'Демонстрация без LLM', model: 'Модель', rules: 'Правила', fallback: 'Резервный алгоритм' }
 
 export default function DispatchPanel({ api, dispatch, disabled, onMode, targets }: {
   api: string
@@ -87,15 +90,16 @@ export default function DispatchPanel({ api, dispatch, disabled, onMode, targets
   return <div className="dispatch-panel">
     <div className="dispatch-actions">
       <label>Планирование <select value={dispatch.mode} disabled={disabled}
-        onChange={event => onMode(event.target.value === 'model' ? 'model' : 'rules')}>
-        <option value="rules">Правила</option>
+        onChange={event => onMode(event.target.value as DispatchState['mode'])}>
+        <option value="rules">Алгоритмы</option><option value="demo">Демонстрация без LLM</option>
         <option value="model" disabled={!dispatch.model_available}>Модель</option>
       </select></label>
       {!dispatch.model_available && <small>Для режима модели укажите ключ на сервере.</small>}
     </div>
-    <h3>Решения</h3>
+    {dispatch.ai && <AIControl api={api} ai={dispatch.ai} disabled={disabled} mode={dispatch.mode} agents={dispatch.agents ?? []} />}
+    <h3>Применённые решения склада</h3>
     {!dispatch.decisions.length && <p>Решения по вариантам появятся после начала смены.</p>}
-    {dispatch.decisions.map((decision, index) => <details key={`${decision.role}-${decision.revision}`} open={index === 0}>
+    {dispatch.decisions.map((decision, index) => <details key={`${decision.role}-${decision.revision}-${index}`} open={index === 0}>
       <summary>{roles[decision.role] ?? decision.role} · {sources[decision.source]} · такт {decision.tick}</summary>
       <p>{decision.reason}</p>
       {decision.batches && <ul>{Object.entries(decision.batches).map(([plan, assignments]) => <li key={plan}>
@@ -119,22 +123,25 @@ export default function DispatchPanel({ api, dispatch, disabled, onMode, targets
       <button className="secondary-button" disabled={disabled || Boolean(pending)}>{pending === 'ask' ? 'Получаем ответ…' : 'Спросить'}</button>
     </form>
     {answer && <div aria-live="polite">
+      <strong>{answer.source === 'demo' ? 'Демонстрационный ответ' : answer.answer ? 'Ответ LLM по снимку склада' : 'Факты без LLM'}</strong>
+      {answer.error && <p>{answer.error}</p>}
       {answer.answer && <p>{answer.answer}</p>}
       <strong>Данные склада · такт {answer.tick}</strong>
       <ul>{answer.facts.map((fact, index) => <li key={index}>{fact}</li>)}</ul>
     </div>}
     <h3>Сравнение на демосмене</h3>
     <p>Четыре заказа, автоматические подтверждения и одно временное перекрытие в обоих прогонах.</p>
-    <button className="secondary-button" disabled={disabled || !dispatch.model_available || Boolean(pending)}
+    <button className="secondary-button" disabled={disabled || (!dispatch.model_available && dispatch.mode !== 'demo') || Boolean(pending)}
       onClick={() => void run('compare', async () => setComparison(await request<Comparison>('compare')))}>
-      {pending === 'compare' ? 'Сравниваем…' : 'Сравнить модель и правила'}
+      {pending === 'compare' ? 'Сравниваем…' : dispatch.mode === 'demo' ? 'Сравнить демонстрацию и алгоритмы' : 'Сравнить модель и алгоритмы'}
     </button>
-    <table>
-      <thead><tr><th>Показатель</th><th>Текущая смена</th>{comparison && <><th>Правила</th><th>Модель</th></>}</tr></thead>
+    {comparison && <p>Время прогона: алгоритмы {comparison.rules.elapsed_ms} мс, {comparison.model.source === 'demo' ? 'демонстрация' : 'модель'} {comparison.model.elapsed_ms} мс. Преимущество LLM этим сравнением не гарантируется.</p>}
+    <div className="ai-table-wrap"><table>
+      <thead><tr><th>Показатель</th><th>Текущая смена</th>{comparison && <><th>Правила</th><th>{comparison.model.source === 'demo' ? 'Демонстрация' : 'Модель'}</th></>}</tr></thead>
       <tbody>{metrics.map(([key, label]) => <tr key={key}><th scope="row">{label}</th>
         <td>{dispatch.metrics[key]}</td>{comparison && <><td>{comparison.rules[key]}</td><td>{comparison.model[key]}</td></>}
       </tr>)}</tbody>
-    </table>
+    </table></div>
     {error && <p className="error-banner" role="alert">{error}</p>}
   </div>
 }

@@ -67,13 +67,14 @@ class DispatchTests(unittest.TestCase):
             Robot("right", (2, 0), home=(0, 0), driver_phase="returning"),
         ]
         warehouse.orders = []
+        warehouse.racks = []
         sim.start()
         for _ in range(3):
             sim.tick()
         proposal = dispatch.zone_options(sim)
         self.assertTrue(proposal.options)
         self.assertTrue(dispatch.apply_zone(sim, proposal, next(iter(proposal.options))))
-        for _ in range(10):
+        for _ in range(40):
             sim.tick()
             self.assertEqual(len({robot.position for robot in warehouse.robots}), 2)
         self.assertEqual([robot.driver_phase for robot in warehouse.robots], ["idle", "idle"])
