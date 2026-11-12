@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import WarehouseScene from './WarehouseScene'
+import DispatchPanel, { type DispatchState } from './DispatchPanel'
 import { Navigation, ObjectInspector, ThemeToggle } from './ControlCenter'
 import { formatCoordinates, formatDimensions, formatPercent, formatSquareMillimeters, occupancyPercent } from './units'
 
@@ -104,6 +105,7 @@ type State = {
     inventory: InventoryItem[]
   }
   events: EventItem[]
+  dispatch?: DispatchState
 }
 
 const API = `http://${window.location.hostname}:8000`
@@ -345,6 +347,19 @@ function App() {
             <Metric label="ТАКТ СИМУЛЯЦИИ" value={String(state.tick).padStart(4, '0')} accent="violet" icon="◷" />
           </div>
 
+          {state.dispatch?.decisions[0] && <section className="panel latest-decision" aria-live="polite">
+            <div><strong>Последнее решение · {state.dispatch.decisions[0].source === 'model' ? 'ИИ' : state.dispatch.decisions[0].source === 'fallback' ? 'резервные правила' : 'правила'}</strong>
+              <p>{state.dispatch.decisions[0].source === 'model' && state.dispatch.decisions[0].batches
+                ? `ИИ выбрал ${state.dispatch.decisions[0].selected_batch}. Факты маршрута и оценки рассчитаны сервером.`
+                : state.dispatch.decisions[0].reason}</p>
+              {state.dispatch.decisions[0].selected.map(key => {
+                const facts = state.dispatch!.decisions[0].options[key]
+                return <p className="decision-evidence" key={key}><b>{key}</b> · {summarizeDecisionFacts(facts)}</p>
+              })}
+            </div>
+            <button type="button" onClick={() => setActivePanel('agents')}>Все варианты</button>
+          </section>}
+
           <nav className="module-launcher" aria-label="Дополнительные панели склада">
             <span className="module-launcher-label">РАЗДЕЛЫ</span>
             <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'orders'} onClick={() => setActivePanel('orders')}><i>↗</i>Заказы<b>{pending}</b></button>
@@ -412,10 +427,11 @@ function App() {
           </section>
 
           <section className="panel agent-panel" role={activePanel === 'agents' ? 'dialog' : undefined} aria-modal={activePanel === 'agents' ? true : undefined} aria-hidden={activePanel !== 'agents'} aria-labelledby="agents-panel-title">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">СПРАВКА</p><h2 id="agents-panel-title">Координация агентов</h2></div><span className="count-pill">3 РОЛИ</span></div>
-            <div className="agent-card manager-card"><div className="agent-avatar manager-avatar">M</div><div><strong>Менеджер склада</strong><span>Приоритеты и назначения</span></div><span className="agent-indicator" /></div>
-            <div className="agent-subgrid"><div className="agent-mini"><div className="agent-avatar robot-avatar">R</div><strong>Агенты техники</strong><span>Маршруты · {robots.length} ед.</span><i /></div><div className="agent-mini"><div className="agent-avatar zone-avatar">Z</div><strong>Агент зоны</strong><span>Проходы · ячейки</span><i /></div></div>
-            <div className="agent-note"><span>i</span><p>Менеджер назначает задания, планировщик строит маршруты, агент зоны учитывает перекрытия. Решения и действия отражены в журнале.</p></div>
+            <div className="panel-heading compact-heading"><div><h2 id="agents-panel-title">Координация агентов</h2></div></div>
+            {state.dispatch ? <DispatchPanel api={API} dispatch={state.dispatch} disabled={busy || connection !== 'online'}
+              onMode={mode => void command('/api/dispatch/mode', { mode })}
+              targets={[...warehouse!.orders.map(order => order.id), ...robots.map(robot => robot.id)]} />
+              : <p>Сервер не передал данные планирования.</p>}
           </section>
 
           <div className="footnote"><span className="secure-icon">◇</span> СИМУЛЯЦИЯ · ВИРТУАЛЬНЫЙ СКЛАД</div>
@@ -424,6 +440,18 @@ function App() {
       </main>
     </div>
   )
+}
+
+function summarizeDecisionFacts(value: unknown): string {
+  if (Array.isArray(value)) return value.map(row => {
+    const facts = row as Record<string, unknown>
+    return `${facts.address}: ${facts.quantity} шт., ${facts.distance_to_shipping_cells} клеток до отгрузки, ${facts.packages_already_stored} шт. уже хранится`
+  }).join('; ')
+  if (!value || typeof value !== 'object') return ''
+  const facts = value as Record<string, unknown>
+  if (typeof facts.robot === 'string') return `${facts.robot}, маршрут ${facts.distance} клеток, оценка ${facts.route_score}`
+  if (typeof facts.passes === 'string') return `${facts.passes}, маршрут ${facts.passage_cells} клеток`
+  return ''
 }
 
 function Metric({ label, value, accent, icon }: { label: string; value: string; accent: string; icon: string }) {

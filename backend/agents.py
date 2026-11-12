@@ -76,11 +76,22 @@ class ManagerAgent:
         robots: list[Robot],
         route_cost: Callable[[Point, Point, set[Point]], int | None],
     ) -> tuple[Robot, int, list[StockAllocation]] | None:
-        """Choose a reachable robot and the lowest-cost stock locations covering an order."""
+        candidates = self.storage_assignments(order, stock_items, robots, route_cost)
+        return candidates[0] if candidates else None
+
+    def storage_assignments(
+        self,
+        order: Order,
+        stock_items: list[StockItem],
+        robots: list[Robot],
+        route_cost: Callable[[Point, Point, set[Point]], int | None],
+        first_stock_id: str | None = None,
+    ) -> list[tuple[Robot, int, list[StockAllocation]]]:
+        """Find feasible assignments, ordered by the deterministic policy."""
         candidates = [item for item in stock_items if (item.product_id or item.id) == order.product_id and item.location_id]
         if not candidates:
-            return None
-        best: tuple[Robot, int, list[StockAllocation]] | None = None
+            return []
+        assignments: list[tuple[Robot, int, list[StockAllocation]]] = []
         occupied_by_robot = {
             robot.id: {other.position for other in robots if other.id != robot.id}
             for robot in robots
@@ -101,6 +112,8 @@ class ManagerAgent:
             while remaining and remaining_items:
                 ranked: list[tuple[int, str, StockItem]] = []
                 for item in remaining_items:
+                    if not allocations and first_stock_id is not None and item.id != first_stock_id:
+                        continue
                     first_leg = route_cost(current, item.position, occupied_by_robot[robot.id])
                     if first_leg is None:
                         continue
@@ -128,9 +141,8 @@ class ManagerAgent:
                 continue
             total_cost += last_leg
             score = order.priority * 10 - total_cost * 2 - load
-            if best is None or score > best[1] or (score == best[1] and robot.id < best[0].id):
-                best = (robot, score, allocations)
-        return best
+            assignments.append((robot, score, allocations))
+        return sorted(assignments, key=lambda assignment: (-assignment[1], assignment[0].id))
 
 
 class RobotAgent:
