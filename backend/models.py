@@ -66,6 +66,9 @@ class Order:
     width_mm: int | None = None
     height_mm: int | None = None
 
+    created_tick: int = 0
+    due_tick: int | None = None
+
     def to_dict(self) -> dict:
         result = asdict(self)
         result["pickup"] = list(self.pickup)

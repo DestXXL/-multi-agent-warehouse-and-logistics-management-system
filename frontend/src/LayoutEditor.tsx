@@ -1,4 +1,4 @@
-import { Navigation } from './ControlCenter'
+import { Navigation, ThemeToggle } from './ControlCenter'
 import { useEffect, useRef, useState } from 'react'
 import './layout.css'
 import { meterInputValue, millimetersFromMeters } from './units'
@@ -55,7 +55,7 @@ export default function LayoutEditor() {
   }
   const capacity = layout.cells.filter(c => c.kind === 'rack').reduce((s,c) => s+c.levels*(c.positions_per_level || 2),0)
   return <div className="app-shell"><Navigation screen="layout" onChange={screen => { window.location.search = `?view=${screen}` }} /><main className="layout-editor">
-    <header><div><h1>Конструктор склада</h1><p>Выберите объект и нажмите на клетку. Свободные клетки служат проходами.</p></div><a href="?view=control">← Диспетчерская</a></header>
+    <header><div><h1>Конструктор склада</h1><p>Выберите объект и нажмите на клетку. Свободные клетки служат проходами.</p></div><div className="layout-header-actions"><ThemeToggle /><a href="?view=control">← Диспетчерская</a></div></header>
     <div className="layout-columns"><aside><details ref={settings} className="editor-settings"><summary>Настройки склада и объектов</summary>
       <h2>Размеры в клетках</h2>
       {(['width', 'height'] as const).map((axis) => <label key={axis}>{axis === 'width' ? 'Ширина' : 'Высота'}<input type="number" min="4" max={axis === 'width' ? 40 : 30} value={layout[axis]} onChange={e => { const n = Number(e.target.value); if (Number.isInteger(n) && n >= 4 && n <= (axis === 'width' ? 40 : 30)) setLayout({ ...layout, [axis]: n }) }} /></label>)}
@@ -67,7 +67,27 @@ export default function LayoutEditor() {
       <p>Ярусы описывают места хранения. Движение техники остаётся на уровне пола.</p>
       </details><div className="editor-actions"><button disabled={busy} onClick={() => run(async () => { const r = await request('/api/layout/validate', 'POST', layout); setMessage(r.valid ? 'Макет корректен: объекты доступны через проходы.' : r.errors.join('; ')) })}>Проверить</button>
       <button disabled={busy} onClick={() => run(async () => { await request('/api/layout', 'PUT', layout); setMessage('Макет применён. В диспетчерской добавьте заказ и запустите симуляцию.') })}>Применить к симуляции</button></div><details className="editor-settings"><summary>Импорт, экспорт и демозаказ</summary>
-      <button disabled={busy} onClick={() => run(async () => { const state = await request('/api/state'); const w = state.warehouse; await request('/api/orders', 'POST', {item:'Демонстрационный груз',pickup:w.pickup_points[0],dropoff:w.shipping_points[0]}); setMessage('Заказ добавлен на применённый склад. Откройте диспетчерскую и запустите симуляцию.') })}>Добавить демозаказ на склад</button>
+      <form onSubmit={event => {
+        event.preventDefault()
+        const data = new FormData(event.currentTarget)
+        void run(async () => {
+          const { warehouse } = await request('/api/state')
+          await request('/api/orders', 'POST', {
+            item: 'Демонстрационный груз',
+            pickup: warehouse.pickup_points[0],
+            dropoff: warehouse.shipping_points[0],
+            quantity: Number(data.get('quantity')),
+            priority: Number(data.get('priority')),
+            due_in_ticks: data.get('due') ? Number(data.get('due')) : null,
+          })
+          setMessage('Заказ добавлен. В диспетчерской откройте «Агенты», чтобы посмотреть решения.')
+        })
+      }}>
+        <label>Количество коробок<input name="quantity" type="number" min="1" max="1000000" defaultValue="1" required /></label>
+        <label>Приоритет<input name="priority" type="number" min="1" max="10" defaultValue="1" required /></label>
+        <label>Срок, тактов с создания<input name="due" type="number" min="1" max="100000" placeholder="Без срока" /></label>
+        <button disabled={busy}>Добавить демозаказ на склад</button>
+      </form>
       <p>Применение создаёт пустую смену на новом складе. Доступно до запуска заданий; после запуска нужен сброс в диспетчерской.</p>
       <button onClick={() => { const url = URL.createObjectURL(new Blob([JSON.stringify(layout,null,2)], {type:'application/json'})); const a = document.createElement('a'); a.href=url; a.download='warehouse-layout.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000) }}>Скачать JSON</button>
       <label>Загрузить JSON<input disabled={busy} type="file" accept=".json,application/json" onChange={e => { const file=e.target.files?.[0]; if(file) void load(file); e.target.value='' }} /></label>
