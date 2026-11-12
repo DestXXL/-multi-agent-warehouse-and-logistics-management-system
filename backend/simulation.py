@@ -1,9 +1,11 @@
 """Warehouse simulation coordinated by deterministic software agents."""
 
 from collections import deque
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from backend.agents import ManagerAgent, RobotAgent, ZoneAgent
+from backend.dispatch import Proposal, coordination_step, destination, record
 from backend.models import Order, Point, Robot, StockItem, Warehouse, StorageLocation, StockAllocation
 from backend.rack_types import (
     RACK_TYPES,
@@ -22,6 +24,9 @@ class WarehouseSimulation:
         self.robot_agent = RobotAgent()
         self.zone_agent = ZoneAgent()
         self.custom_layout = None
+        self.dispatch_mode = "rules"
+        self.model_available = False
+        self.revision = 0
         self.reset()
 
     def reset(self) -> None:
@@ -83,6 +88,11 @@ class WarehouseSimulation:
         self.running = False
         self.zone_agent.clear()
         self.tick_count = 0
+        self.motion_wait: dict[str, int] = {}
+        self.coordination = None
+        self.closure_review = False
+        self.metrics = dict(distance=0, waiting=0, queue_wait=0, requests=0, tokens=0, fallbacks=0)
+        self.decisions: deque[dict] = deque(maxlen=8)
         self.next_order_number = 4
         self.events: deque[dict] = deque(maxlen=100)
         self._event("Склад подготовлен. Ожидается запуск симуляции.", "system")
@@ -200,13 +210,18 @@ class WarehouseSimulation:
             "warehouse": warehouse,
             "storage_summary": {"locations": len(warehouse["storage_locations"]), "occupied": occupied, "free": len(warehouse["storage_locations"]) - occupied},
             "events": list(self.events),
+            "dispatch": {
+                "mode": self.dispatch_mode, "model_available": self.model_available,
+                "metrics": self.shift_metrics(), "decisions": list(self.decisions),
+            },
         }
 
-    def start(self) -> dict:
+    def start(self, *, assign_orders: bool = True) -> dict:
         if not self.running:
             self.running = True
             self._event("Симуляция запущена. Откройте планшет и примите задание.", "system")
-            self._assign_orders()
+            if assign_orders:
+                self.assign_orders()
         return self.state()
 
     def pause(self) -> dict:
@@ -223,6 +238,10 @@ class WarehouseSimulation:
         product_id: str | None = None,
         quantity: int = 1,
         dimensions: tuple[int, int, int] | None = None,
+        *,
+        priority: int = 1,
+        due_in_ticks: int | None = None,
+        storage_plan=None,
     ) -> dict:
         order_id = f"ORD-{self.next_order_number:03d}"
         if quantity < 1:
@@ -231,7 +250,7 @@ class WarehouseSimulation:
             dimensions = dimensions or generated_cargo_dimensions(self.next_order_number)
             if any(not isinstance(value, int) or value <= 0 for value in dimensions):
                 raise ValueError("Габариты груза должны быть положительными целыми числами в миллиметрах")
-            planned = self.manager_agent.choose_storage_positions(
+            planned = storage_plan if storage_plan is not None else self.manager_agent.choose_storage_positions(
                 dimensions,
                 quantity,
                 self.warehouse.storage_locations,
@@ -274,6 +293,9 @@ class WarehouseSimulation:
             item_id=item_id,
             product_id=product_id,
             quantity=quantity,
+            priority=priority,
+            created_tick=self.tick_count,
+            due_tick=None if due_in_ticks is None else self.tick_count + due_in_ticks,
             length_mm=dimensions[0] if dimensions else None,
             width_mm=dimensions[1] if dimensions else None,
             height_mm=dimensions[2] if dimensions else None,
@@ -365,11 +387,14 @@ class WarehouseSimulation:
     def _report_point(self, robot: Robot) -> Point | None:
         if not robot.order_id or not robot.route:
             return None
-        order = self._get_order(robot.order_id)
         occupied = {item.position for item in self.warehouse.robots}
         # A report closes the next aisle cell, never a vehicle or a handling location.
         point = robot.route[0]
-        if point in occupied or point in (order.pickup, order.dropoff):
+        handling = set(self.warehouse.pickup_points + self.warehouse.shipping_points)
+        handling.update(rack.service_point for rack in self.warehouse.racks)
+        handling.update(robot.home for robot in self.warehouse.robots)
+        handling.update(point for order in self.warehouse.orders for point in (order.pickup, order.dropoff))
+        if point in occupied or point in handling:
             return None
         return point
 
@@ -384,6 +409,8 @@ class WarehouseSimulation:
             if selected is None:
                 raise ValueError("Нет подходящего прохода для демонстрации затора")
             robot, point, _ = selected
+        self.coordination = None
+        self.closure_review = True
         self.zone_agent.close_aisle(point, set(self.warehouse.obstacles), self.warehouse.width, self.warehouse.height)
         self._event(f"Проход {point} закрыт по сообщению водителя {robot.id}.", "zone", robot_id=robot.id)
         for resource in self.warehouse.robots:
@@ -395,6 +422,8 @@ class WarehouseSimulation:
         return self.state()
 
     def reopen_aisles(self) -> dict:
+        self.coordination = None
+        self.closure_review = False
         self.zone_agent.clear()
         for robot in self.warehouse.robots:
             self._refresh_route(robot)
@@ -525,7 +554,13 @@ class WarehouseSimulation:
             existing_route = self._plan_route(robot.position, goal, occupied)
             if not existing_route:
                 continue
+            protected = set(self.warehouse.pickup_points + self.warehouse.shipping_points)
+            protected.update(rack.service_point for rack in self.warehouse.racks)
+            protected.update(resource.home for resource in self.warehouse.robots)
+            protected.update(cell for order in self.warehouse.orders for cell in (order.pickup, order.dropoff))
             for point in existing_route[1:-1]:
+                if point in protected:
+                    continue
                 alternative = self._plan_route(robot.position, goal, occupied, {point})
                 if alternative and len(alternative) > len(existing_route):
                     selected = (robot, point, alternative)
@@ -534,25 +569,41 @@ class WarehouseSimulation:
                 break
         return selected
 
-    def tick(self) -> dict:
+    def tick(self, *, assign_orders: bool = True) -> dict:
         if not self.running:
             return self.state()
 
         self.tick_count += 1
-        self._assign_orders()
+        self.metrics["queue_wait"] += sum(order.status == "pending" for order in self.warehouse.orders)
+        if assign_orders:
+            self.assign_orders()
         occupied = {robot.position for robot in self.warehouse.robots}
 
+        exclusive = bool(self.coordination and self.coordination[0][3])
+        step = coordination_step(self)
         for robot in sorted(self.warehouse.robots, key=lambda item: item.id):
+            goal = destination(self, robot)
+            if exclusive and step and robot.id != step[0]:
+                if goal is not None and not robot.stopped_by_operator:
+                    robot.status = "waiting"
+                    robot.route = []
+                    self.metrics["waiting"] += 1
+                continue
             if robot.stopped_by_operator:
                 continue
             if robot.driver_phase == "returning":
                 occupied.discard(robot.position)
-                route = self._plan_route(robot.position, robot.home, occupied)
+                route = step[1] if step and step[0] == robot.id and step[1][0] not in occupied else self._plan_route(robot.position, robot.home, occupied)
                 if route:
+                    self.metrics["distance"] += 1
+                    self.motion_wait[robot.id] = 0
                     robot.position = route[0]
                     robot.route = route[1:]
                     robot.status = "moving"
                 else:
+                    if goal != robot.position:
+                        self.metrics["waiting"] += 1
+                        self.motion_wait[robot.id] = self.motion_wait.get(robot.id, 0) + 1
                     robot.route = []
                     robot.status = "waiting"
                 occupied.add(robot.position)
@@ -565,19 +616,24 @@ class WarehouseSimulation:
             if robot.driver_phase not in ("to_pickup", "to_dropoff"):
                 continue
             order = self._get_order(robot.order_id)
-            destination = self._current_pickup_point(order) if robot.driver_phase == "to_pickup" else order.dropoff
-            if robot.position != destination:
+            target = self._current_pickup_point(order) if robot.driver_phase == "to_pickup" else order.dropoff
+            if robot.position != target:
                 occupied.discard(robot.position)
-                route = self._plan_route(robot.position, destination, occupied)
+                route = step[1] if step and step[0] == robot.id and step[1][0] not in occupied else self._plan_route(robot.position, target, occupied)
                 if route:
+                    self.metrics["distance"] += 1
+                    self.motion_wait[robot.id] = 0
                     robot.position = route[0]
                     robot.route = route[1:]
                     robot.status = "moving"
                 else:
+                    if goal != robot.position:
+                        self.metrics["waiting"] += 1
+                        self.motion_wait[robot.id] = self.motion_wait.get(robot.id, 0) + 1
                     robot.route = []
                     robot.status = "waiting"
                 occupied.add(robot.position)
-            if robot.position == destination:
+            if robot.position == target:
                 arriving_at_pickup = robot.driver_phase == "to_pickup"
                 robot.driver_phase = "confirm_pickup" if arriving_at_pickup else "confirm_delivery"
                 robot.status = "waiting"
@@ -586,62 +642,96 @@ class WarehouseSimulation:
                     order.status = "picking"
                 address = self._location_address(order.storage_location_id) if arriving_at_pickup and order.storage_location_id else ""
                 action = f" к адресу {address}" if address else ""
-                self._event(f"{robot.id} прибыл к точке обслуживания{action} ({destination}). Требуется подтверждение водителя.", "system", robot_id=robot.id, order_id=order.id)
+                self._event(f"{robot.id} прибыл к точке обслуживания{action} ({target}). Требуется подтверждение водителя.", "system", robot_id=robot.id, order_id=order.id)
 
         return self.state()
 
-    def _assign_orders(self) -> None:
-        pending_orders = sorted(
+    def _pending_orders(self) -> list[Order]:
+        return sorted(
             (order for order in self.warehouse.orders if order.status == "pending"),
             key=lambda order: (-order.priority, order.id),
         )
-        for order in pending_orders:
-            if not order.product_id:
-                stock_item = self._get_stock_item(order.item_id)
-                order.product_id = stock_item.product_id or stock_item.id
-            if order.length_mm is None or order.width_mm is None or order.height_mm is None:
-                matching = next((item for item in self.warehouse.inventory if item.product_id == order.product_id), None)
-                if matching:
-                    order.length_mm, order.width_mm, order.height_mm = matching.length_mm, matching.width_mm, matching.height_mm
-            assignment = self.manager_agent.choose_storage_assignment(
-                order,
-                self.warehouse.inventory,
-                self.warehouse.robots,
-                self._route_cost,
+
+    def _free_placements(self, item: StockItem) -> list[dict]:
+        reserved = [rectangle for rows in item.reserved_placements.values() for rectangle in rows]
+        return [rectangle for rectangle in item.unit_placements if rectangle not in reserved]
+
+    def _assignment_options(self, order: Order, first_stock_id: str | None = None) -> list[tuple[Robot, int, list[StockAllocation]]]:
+        if not order.product_id:
+            item = self._get_stock_item(order.item_id)
+            order = replace(order, product_id=item.product_id or item.id)
+        candidates = self.manager_agent.storage_assignments(
+            order, self.warehouse.inventory, self.warehouse.robots, self._route_cost, first_stock_id
+        )
+        return [
+            option for option in candidates
+            if all(
+                len(self._free_placements(self._get_stock_item(allocation.stock_item_id))) >= allocation.quantity
+                for allocation in option[2]
             )
-            if assignment is None:
-                continue
-            robot, score, allocations = assignment
-            order.allocations = allocations
-            order.allocation_index = 0
-            order.storage_location_id = allocations[0].storage_location_id
-            order.item_id = allocations[0].stock_item_id
-            order.pickup = self._get_stock_item(order.item_id).position
-            for allocation in allocations:
-                stock_item = self._get_stock_item(allocation.stock_item_id)
-                stock_item.reservations[order.id] = allocation.quantity
-                stock_item.reserved_by = order.id
-                unavailable = [rectangle for rows in stock_item.reserved_placements.values() for rectangle in rows]
-                available = [rectangle for rectangle in stock_item.unit_placements if rectangle not in unavailable]
-                if len(available) < allocation.quantity:
-                    raise ValueError(f"Недостаточно свободных коробок на адресе {self._location_address(allocation.storage_location_id)}")
-                selected_placements = available[:allocation.quantity]
-                stock_item.reserved_placements[order.id] = selected_placements
-                allocation.placement_snapshot = list(selected_placements)
-                self._sync_stock_status(stock_item)
-            robot.order_id = order.id
-            robot.driver_phase = "offered"
-            robot.status = "waiting"
-            order.robot_id = robot.id
-            order.status = "assigned"
-            self._refresh_route(robot)
-            address_list = ", ".join(f"{self._location_address(allocation.storage_location_id)} ({allocation.quantity} шт.)" for allocation in allocations)
-            self._event(
-                f"Для {order.item} найдено {order.quantity} шт. по адресам {address_list}. Менеджер назначил {robot.id} и зарезервировал остаток (оценка {score}).",
-                "manager",
-                robot_id=robot.id,
-                order_id=order.id,
-            )
+        ]
+
+    def shift_metrics(self) -> dict:
+        return {
+            **self.metrics,
+            "ticks": self.tick_count,
+            "completed": sum(order.status == "completed" for order in self.warehouse.orders),
+        }
+
+    def assign_orders(self) -> bool:
+        revision = self.revision
+        selected, facts = [], {}
+        for order in self._pending_orders():
+            options = self._assignment_options(order)
+            if options:
+                for index, (robot, _, rows) in enumerate(options[:8]):
+                    key = f"{order.id}/{index + 1}"
+                    facts[key] = {
+                        "robot": robot.id,
+                        "pickups": {row.storage_location_id: row.quantity for row in rows},
+                    }
+                    if index == 0:
+                        selected.append(key)
+                self.apply_assignment(order, options[0])
+        if selected:
+            record(self, Proposal("manager", revision, {}, facts), selected, "rules",
+                   f"Правила назначили заказы: {', '.join(selected)}.")
+        return bool(selected)
+
+    def apply_assignment(self, order: Order, option, reason: str | None = None) -> None:
+        robot, score, allocations = option
+        first_stock = self._get_stock_item(allocations[0].stock_item_id)
+        order.product_id = first_stock.product_id or first_stock.id
+        order.length_mm = first_stock.length_mm
+        order.width_mm = first_stock.width_mm
+        order.height_mm = first_stock.height_mm
+        order.allocations = allocations
+        order.allocation_index = 0
+        order.storage_location_id = allocations[0].storage_location_id
+        order.item_id = allocations[0].stock_item_id
+        order.pickup = self._get_stock_item(order.item_id).position
+        for allocation in allocations:
+            stock_item = self._get_stock_item(allocation.stock_item_id)
+            stock_item.reservations[order.id] = allocation.quantity
+            stock_item.reserved_by = order.id
+            selected_placements = self._free_placements(stock_item)[:allocation.quantity]
+            stock_item.reserved_placements[order.id] = selected_placements
+            allocation.placement_snapshot = list(selected_placements)
+            self._sync_stock_status(stock_item)
+        robot.order_id = order.id
+        robot.driver_phase = "offered"
+        robot.status = "waiting"
+        order.robot_id = robot.id
+        order.status = "assigned"
+        self._refresh_route(robot)
+        explanation = f" DeepSeek: {reason}" if reason else ""
+        address_list = ", ".join(f"{self._location_address(allocation.storage_location_id)} ({allocation.quantity} шт.)" for allocation in allocations)
+        self._event(
+            f"Для {order.item} найдено {order.quantity} шт. по адресам {address_list}. Менеджер назначил {robot.id} и зарезервировал остаток (оценка {score}).{explanation}",
+            "manager",
+            robot_id=robot.id,
+            order_id=order.id,
+        )
 
     def _route_cost(self, start: Point, goal: Point, occupied: set[Point]) -> int | None:
         route = self._plan_route(start, goal, occupied)
@@ -683,9 +773,10 @@ class WarehouseSimulation:
         raise KeyError(f"Складская позиция {item_id or '(не задана)'} не найдена")
 
     def _event(self, message: str, source: str, **details: str) -> None:
+        self.revision += 1
         self.events.appendleft(
             {
-                "id": f"evt-{self.tick_count}-{len(self.events)}-{datetime.now(UTC).timestamp():.3f}",
+                "id": f"evt-{self.revision}",
                 "tick": self.tick_count,
                 "time": datetime.now(UTC).isoformat(),
                 "source": source,
