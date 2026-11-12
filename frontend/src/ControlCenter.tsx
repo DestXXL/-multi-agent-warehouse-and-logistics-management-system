@@ -17,22 +17,22 @@ export function ThemeToggle() {
 export function Navigation({ screen, onChange }: { screen: 'control' | 'driver' | 'layout'; onChange: (screen: 'control' | 'driver') => void }) {
   return <nav className="app-navigation" aria-label="Основная навигация">
     <div className="nav-brand" aria-hidden="true">W<span>CC</span></div>
-    <button type="button" className={screen === 'control' ? 'active' : ''} aria-current={screen === 'control' ? 'page' : undefined} onClick={() => onChange('control')}><NavIcon kind="map" /><span>Диспетчерская</span></button>
-    <button type="button" className={screen === 'driver' ? 'active' : ''} aria-current={screen === 'driver' ? 'page' : undefined} onClick={() => onChange('driver')}><NavIcon kind="tablet" /><span>Планшет водителя</span></button>
-    <a href="?view=layout" className={screen === 'layout' ? 'active' : ''} aria-current={screen === 'layout' ? 'page' : undefined}><NavIcon kind="layout" /><span>Конструктор</span></a>
+    <button type="button" className={screen === 'control' ? 'active' : ''} aria-current={screen === 'control' ? 'page' : undefined} aria-label="Диспетчерская" onClick={() => onChange('control')}><NavIcon kind="map" /><span>Диспетчерская</span></button>
+    <button type="button" className={screen === 'driver' ? 'active' : ''} aria-current={screen === 'driver' ? 'page' : undefined} aria-label="Планшет водителя" onClick={() => onChange('driver')}><NavIcon kind="tablet" /><span>Планшет водителя</span></button>
+    <a href="?view=layout" aria-label="Конструктор" className={screen === 'layout' ? 'active' : ''} aria-current={screen === 'layout' ? 'page' : undefined}><NavIcon kind="layout" /><span>Конструктор</span></a>
     <div className="nav-footer">Модель склада<span>Локальная симуляция</span></div>
   </nav>
 }
 
 function NavIcon({ kind }: { kind: 'map' | 'tablet' | 'layout' }) {
-  return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{kind === 'map' ? <><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4M7 8h4v5H7zM15 8h2M15 12h2" /></> : kind === 'tablet' ? <><rect x="5" y="2" width="14" height="20" rx="2" /><path d="M9 6h6M11 18h2" /></> : <><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></>}</svg>
+  return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">{kind === 'map' ? <><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4M7 8h4v5H7zM15 8h2M15 12h2" /></> : kind === 'tablet' ? <><rect x="5" y="2" width="14" height="20" rx="2" /><path d="M9 6h6M11 18h2" /></> : <><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></>}</svg>
 }
 
 export function ObjectInspector({ rack, robot, order, phase, status, isOpen, onClose, onRackDetails }: { rack?: Rack; robot?: Robot; order?: Order; phase?: string; status?: string; isOpen: boolean; onClose: () => void; onRackDetails: () => void }) {
   const panel = useRef<HTMLElement>(null)
   const selection = rack?.id ?? robot?.id ?? order?.id
   useEffect(() => {
-    if (selection) panel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (selection) panel.current?.scrollIntoView({ block: 'nearest' })
   }, [selection])
   return <section ref={panel} className={`panel object-inspector ${(rack || robot || order) ? 'has-selection' : ''}`} role={isOpen && selection ? 'dialog' : undefined} aria-modal={isOpen && selection ? true : undefined} aria-hidden={!isOpen} aria-label="Выбранный объект">
     <div className="inspector-heading"><div><span className="inspector-type">{rack ? 'Стеллаж' : robot ? 'Погрузчик' : order ? 'Заказ' : 'Контекст объекта'}</span><h2>{rack?.id ?? robot?.id ?? order?.id ?? 'Выберите объект'}</h2></div>{(rack || robot || order) && <button className="icon-button" aria-label="Закрыть окно объекта" onClick={onClose}>×</button>}</div>

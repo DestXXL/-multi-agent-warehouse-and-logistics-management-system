@@ -80,18 +80,18 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
         onPointerMove={event => { const matrix = svg.current?.getScreenCTM(); if (drag.current && matrix) setPan({ x: drag.current.px + event.clientX / matrix.a - drag.current.x, y: drag.current.py + event.clientY / matrix.d - drag.current.y }) }}
         onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}>
         <defs>
-          <pattern id={`${id}-grid`} width={unit} height={unit} patternUnits="userSpaceOnUse"><path d={`M ${unit} 0 H 0 V ${unit}`} fill="none" stroke="#263641" strokeWidth="1" /></pattern>
+          <pattern id={`${id}-grid`} width={unit} height={unit} patternUnits="userSpaceOnUse"><path d={`M ${unit} 0 H 0 V ${unit}`} fill="none" stroke="var(--map-grid)" strokeWidth="1" /></pattern>
           <pattern id={`${id}-closed`} width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="12" fill="#e66d75" fillOpacity=".22" /></pattern>
-          <marker id={`${id}-arrow`} viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7898f5" /></marker>
+          <marker id={`${id}-arrow`} viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--route)" /></marker>
         </defs>
         <g transform={`translate(${32 + pan.x} ${32 + pan.y}) scale(${zoom})`}>
-          <rect width={w.width * unit} height={w.height * unit} rx="3" fill="#101a22" stroke="#3a4b58" />
+          <rect width={w.width * unit} height={w.height * unit} rx="3" fill="var(--map-floor)" stroke="var(--map-border)" />
           <rect width={w.width * unit} height={w.height * unit} fill={`url(#${id}-grid)`} />
           {Array.from({ length: w.width }, (_, x) => <text key={x} className="scene-axis" x={x * unit + 32} y="-12" textAnchor="middle">{x}</text>)}
           {Array.from({ length: w.height }, (_, y) => <text key={y} className="scene-axis" x="-14" y={y * unit + 36} textAnchor="middle">{y}</text>)}
-          {w.obstacles.filter(p => !w.racks.some(r => r.position[0] === p[0] && r.position[1] === p[1])).map(p => <rect key={`wall-${p}`} x={p[0] * unit + 3} y={p[1] * unit + 3} width="58" height="58" fill="#34434d" />)}
+          {w.obstacles.filter(p => !w.racks.some(r => r.position[0] === p[0] && r.position[1] === p[1])).map(p => <rect key={`wall-${p}`} x={p[0] * unit + 3} y={p[1] * unit + 3} width="58" height="58" fill="var(--map-wall)" />)}
           {(['pickup', 'shipping'] as const).flatMap(kind => w[kind === 'pickup' ? 'pickup_points' : 'shipping_points'].map(p => <g key={`${kind}-${p}`} className={`scene-zone ${kind}`}><rect x={p[0] * unit + 4} y={p[1] * unit + 4} width="56" height="56" rx="4" /><text x={p[0] * unit + 32} y={p[1] * unit + 36} textAnchor="middle">{kind === 'pickup' ? 'Забор' : 'Вывоз'}</text></g>))}
-          {target && <g className="scene-target"><rect x={target[0] * unit + 5} y={target[1] * unit + 5} width="54" height="54" rx="4" /><text x={target[0] * unit + 32} y={target[1] * unit + 16} textAnchor="middle">ЦЕЛЬ</text></g>}
+          {target && <g className="scene-target"><rect x={target[0] * unit + 5} y={target[1] * unit + 5} width="54" height="54" rx="4" /><text x={target[0] * unit + 32} y={target[1] * unit + 16} textAnchor="middle">Цель</text></g>}
           {route && route.route.length > 0 && <polyline className="scene-route" points={[route.position, ...route.route].map(center).join(' ')} markerEnd={`url(#${id}-arrow)`} />}
           {w.racks.map(rack => {
             const rw = rack.width_mm * ratio, rd = rack.depth_mm * ratio
@@ -124,6 +124,6 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
       </svg>
       {tip && <div className="scene-tooltip" role="status"><strong>{tip.id} <span>{tip.rack_type_title}</span></strong><p>{formatDimensions(tip.width_mm, tip.depth_mm, tip.height_mm)} · {tip.levels} ярусов</p><p>{formatPercent(occupancyPercent(tip.occupied_locations, tip.location_count))}% мест занято · {tip.free_locations} свободных мест · {tip.service_point ? 'Есть точка обслуживания' : 'Нет точки обслуживания'}</p></div>}
     </div>
-    <div className="scene-caption"><span>Перемещайте карту пальцем или мышью. + / − – масштаб</span><span>Грузы: ярус {visibleLevel} · 1 клетка ≈ {scale.cellStepM.toLocaleString('ru')} м</span></div>
+    <div className="scene-caption"><span>Перетащите карту · + / − для масштаба</span><span>Грузы: ярус {visibleLevel} · 1 клетка ≈ {scale.cellStepM.toLocaleString('ru')} м</span></div>
   </div>
 }

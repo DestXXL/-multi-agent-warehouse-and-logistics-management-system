@@ -111,12 +111,12 @@ type State = {
 const API = `http://${window.location.hostname}:8000`
 
 const sourceNames: Record<string, string> = {
-  manager: 'МЕНЕДЖЕР',
-  robot: 'ТЕХНИКА',
-  driver: 'ВОДИТЕЛЬ',
-  operator: 'ОПЕРАТОР',
-  system: 'СИСТЕМА',
-  zone: 'АГЕНТ ЗОНЫ',
+  manager: 'Менеджер',
+  robot: 'Техника',
+  driver: 'Водитель',
+  operator: 'Оператор',
+  system: 'Система',
+  zone: 'Агент зоны',
 }
 
 const orderNames: Record<Order['status'], string> = {
@@ -300,7 +300,6 @@ function App() {
     return (
       <main className="connection-screen">
         <div className="brand-mark">W</div>
-        <p className="eyebrow">УПРАВЛЕНИЕ СКЛАДОМ</p>
         <h1>Подключаем склад</h1>
         <p className="muted">{error || 'Получаем состояние симуляции…'}</p>
         <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">Открыть API сервера ↗</a>
@@ -323,9 +322,9 @@ function App() {
       {activePanel && activePanel !== 'object' && createPortal(<button className="module-dialog-close" type="button" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button>, document.body)}
       {toasts.length > 0 && <div className="toast-stack" role="status" aria-live="polite">{toasts.map(toast => <div className="event-toast" key={toast.id}><span className={`toast-source ${toast.source}`} /><p>{toast.message}</p><button type="button" aria-label="Закрыть уведомление" onClick={() => setToasts(current => current.filter(item => item.id !== toast.id))}>×</button></div>)}</div>}
       <header className="topbar">
-        <div className="brand-lockup"><div className="brand-mark">W</div><div><strong>Центр управления складом</strong><span>Управление складом и логистикой</span></div></div>
+        <div className="brand-lockup"><div className="brand-mark">W</div><div><strong>Центр управления складом</strong></div></div>
         <div className="topbar-center"><span className={`connection-dot ${connection}`} />{connection === 'online' ? 'На связи' : 'Нет связи'}</div>
-        <div className="topbar-right"><ThemeToggle /><span className={`simulation-badge ${state.running ? 'is-running' : ''}`}><span />{state.running ? 'Симуляция активна' : 'На паузе'}</span><button className="header-start" disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Ⅱ Пауза' : '▶ Запустить'}</button><span className="live-clock">Такт · {String(state.tick).padStart(4, '0')}</span><span className="avatar">{screen === 'control' ? 'ОП' : 'В-01'}</span></div>
+        <div className="topbar-right"><ThemeToggle /><span className={`simulation-badge ${state.running ? 'is-running' : ''}`}><span />{state.running ? 'Симуляция активна' : 'На паузе'}</span><button className="header-start" disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Приостановить' : 'Запустить'}</button>{screen === 'driver' && <span className="live-clock">Такт · {state.tick}</span>}</div>
       </header>
 
       <main className={`workspace ${screen === 'driver' ? 'driver-workspace' : ''}`}>
@@ -336,15 +335,15 @@ function App() {
         ) : <>
         <section className="main-column">
           <div className="page-heading">
-            <div><h1>Диспетчерская</h1><p className="muted">Склад {warehouse!.width} × {warehouse!.height} клеток · {warehouse!.racks.length} стеллажей · схема ≈ { (warehouse!.width * physicalScale.cellStepM).toLocaleString("ru") } × { (warehouse!.height * physicalScale.cellStepM).toLocaleString("ru") } м</p></div>
+            <div><h1>Диспетчерская</h1><p className="muted">{warehouse!.width} × {warehouse!.height} клеток · {warehouse!.racks.length} стеллажей · ≈ { (warehouse!.width * physicalScale.cellStepM).toLocaleString("ru") } × { (warehouse!.height * physicalScale.cellStepM).toLocaleString("ru") } м</p></div>
             <span className="workspace-hint">Выберите действие или объект на карте</span>
           </div>
 
           <div className="metric-row">
-            <Metric label="АКТИВНАЯ ТЕХНИКА" value={`${activeRobots} / ${robots.length}`} accent="lime" icon="✣" />
-            <Metric label="НЕЗАВЕРШЁННЫЕ ЗАКАЗЫ" value={String(pending).padStart(2, '0')} accent="blue" icon="↗" />
-            <Metric label="ВЫПОЛНЕНО В СЦЕНАРИИ" value={String(completed).padStart(2, '0')} accent="orange" icon="✓" />
-            <Metric label="ТАКТ СИМУЛЯЦИИ" value={String(state.tick).padStart(4, '0')} accent="violet" icon="◷" />
+            <Metric label="Техника в работе" value={`${activeRobots} / ${robots.length}`} />
+            <Metric label="Открытые заказы" value={String(pending)} />
+            <Metric label="Выполнено за смену" value={String(completed)} />
+            <Metric label="Такт симуляции" value={String(state.tick)} />
           </div>
 
           {state.dispatch?.decisions[0] && <section className="panel latest-decision" aria-live="polite">
@@ -373,27 +372,26 @@ function App() {
 
           <section className="panel map-panel" id="warehouse-map-panel">
             <div className="panel-heading map-heading">
-              <div><h2>Карта склада <span className="soft-tag">{warehouse!.width} × {warehouse!.height} клеток</span></h2></div>
+              <h2>Карта склада</h2>
               <div className="map-actions"><span className="map-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
             </div>
             <details className="scale-settings"><summary>Масштаб и габариты техники</summary><div className="map-dimension-controls"><label title="Расстояние между центрами соседних клеток">Шаг сетки <span><input type="number" min="0.5" max="20" step="0.1" value={physicalScaleDraft.cellStepM} onChange={event => updatePhysicalScale('cellStepM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, cellStepM: String(physicalScale.cellStepM) }))} /> м</span></label><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Примерный шаг сетки · ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div></details>
             <div className="map-legend"><span><i className="legend-dot robot-dot" /> Погрузчик</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box pickup-dot" /> Комплектация</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> {highlightedRobotId ? `Маршрут ${highlightedRobotId}` : 'Маршрут по выбору'}</span><span><i className="legend-box aisle-dot" /> Проезд · м</span><span className="aisle-warning-legend">Красный – уже погрузчика</span>{highlightedRobotId && <button className="clear-route-button" type="button" onClick={() => setHighlightedRobotId(null)}>Снять выделение</button>}</div>
             <WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={highlightedRobotId} onRack={selectRack} onRobot={selectRobot} />
-            <div className="map-footer"><span><i className="footer-pulse" /> Карта обновляется автоматически</span><span>Выберите объект для подробностей</span></div>
           </section>
 
           <ObjectInspector rack={selectedRackData} robot={selectedOrder ? undefined : selectedRobot} order={selectedOrder} phase={selectedRobot ? phaseNames[selectedRobot.driver_phase] : undefined} status={selectedOrder ? orderNames[selectedOrder.status] : undefined} isOpen={activePanel === 'object'} onClose={() => { setSelectedRackId(null); setHighlightedRobotId(null); setSelectedOrderId(null); setActivePanel(null) }} onRackDetails={() => { setDetailRackId(selectedRackId); setActivePanel(null) }} />
           <div className="lower-grid">
             <section className="panel orders-panel" id="orders" role={activePanel === 'orders' ? 'dialog' : undefined} aria-modal={activePanel === 'orders' ? true : undefined} aria-hidden={activePanel !== 'orders'} aria-labelledby="orders-panel-title">
-              <div className="panel-heading compact-heading"><div><p className="eyebrow">ЗАКАЗЫ</p><h2 id="orders-panel-title">Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span></div>
-              <div className="order-tools"><div className="order-search"><span aria-hidden="true">⌕</span><input value={orderQuery} onChange={event => setOrderQuery(event.target.value)} placeholder="Найти заказ или товар" aria-label="Поиск заказов" /><button type="button" aria-label="Очистить поиск" onClick={() => setOrderQuery('')} disabled={!orderQuery}>×</button></div><label className="order-filter"><span>Статус</span><select value={orderStatusFilter} onChange={event => setOrderStatusFilter(event.target.value as OrderStatusFilter)} aria-label="Фильтр по статусу"><option value="all">Все</option>{Object.entries(orderNames).map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select></label></div>
+              <div className="panel-heading compact-heading"><div><h2 id="orders-panel-title">Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span></div>
+              <div className="order-tools"><div className="order-search"><input value={orderQuery} onChange={event => setOrderQuery(event.target.value)} placeholder="Заказ или товар" aria-label="Поиск заказов" /><button type="button" aria-label="Очистить поиск" onClick={() => setOrderQuery('')} disabled={!orderQuery}>×</button></div><label className="order-filter"><span>Статус</span><select value={orderStatusFilter} onChange={event => setOrderStatusFilter(event.target.value as OrderStatusFilter)} aria-label="Фильтр по статусу"><option value="all">Все</option>{Object.entries(orderNames).map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select></label></div>
               <div className="order-list">
                 {filteredOrders.map((order) => <OrderRow key={order.id} order={order} highlightedRobotId={highlightedRobotId} onShowRoute={showOrderRoute} onSelect={() => { setSelectedOrderId(order.id); setSelectedRackId(null); setHighlightedRobotId(order.robot_id); setActivePanel('object') }} />)}
                 {filteredOrders.length === 0 && <div className="order-empty">Заказы по этому запросу не найдены.</div>}
               </div>
             </section>
           <section className="panel activity-panel" role={activePanel === 'activity' ? 'dialog' : undefined} aria-modal={activePanel === 'activity' ? true : undefined} aria-hidden={activePanel !== 'activity'} aria-labelledby="activity-panel-title">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">СОБЫТИЯ</p><h2 id="activity-panel-title">Журнал событий</h2></div><span className="activity-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
+            <div className="panel-heading compact-heading"><div><h2 id="activity-panel-title">Журнал событий</h2></div><span className="activity-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
             <label className="event-filter">Источник <select value={eventSource} onChange={event => setEventSource(event.target.value)}><option value="all">Все события</option>{Object.entries(sourceNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
             <div className="event-list">
               {visibleEvents.slice(0, 30).map((event, index) => <div className="event-row" key={event.id}><div className={`event-line ${event.source}`}><i /></div><div className="event-copy"><div><span className={`source-label ${event.source}`}>{sourceNames[event.source] ?? event.source}</span><time>{new Date(event.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time></div><p>{event.message}</p></div>{index === 0 && state.running && <span className="new-event">Сейчас</span>}</div>)}
@@ -401,16 +399,16 @@ function App() {
             <div className="all-events">Показано {Math.min(30, visibleEvents.length)} из {visibleEvents.length} событий</div>
           </section>
             <section className="panel fleet-panel" role={activePanel === 'fleet' ? 'dialog' : undefined} aria-modal={activePanel === 'fleet' ? true : undefined} aria-hidden={activePanel !== 'fleet'} aria-labelledby="fleet-panel-title">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">ТЕХНИКА</p><h2 id="fleet-panel-title">Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span></div>
+            <div className="panel-heading compact-heading"><div><h2 id="fleet-panel-title">Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span></div>
               <div className="fleet-list">
-                {robots.map((robot) => <div className={`fleet-row ${highlightedRobotId === robot.id ? 'is-selected' : ''}`} key={robot.id}><div className="fleet-icon">✣</div><div className="fleet-info"><strong>{robot.id}<small>{phaseNames[robot.driver_phase]}</small></strong><span>{robot.order_id ? `Задание ${robot.order_id}` : 'Нет активного задания'}</span></div><button type="button" className="fleet-map-button" aria-pressed={highlightedRobotId === robot.id} onClick={() => selectRobot(robot.id)}>{highlightedRobotId === robot.id ? 'На карте ✓' : 'Показать'}</button><a className="driver-link" href={`?view=driver&vehicle=${robot.id}`} target="_blank" rel="noreferrer">Планшет ↗</a><button className="stop-button" aria-label={`${robot.status === 'stopped' ? 'Продолжить' : 'Остановить'} ${robot.id}`} disabled={busy || connection !== 'online'} onClick={() => command(`/api/robots/${robot.id}/${robot.status === 'stopped' ? 'resume' : 'stop'}`)}>{robot.status === 'stopped' ? '▶' : 'Ⅱ'}</button></div>)}
+                {robots.map((robot) => <div className={`fleet-row ${highlightedRobotId === robot.id ? 'is-selected' : ''}`} key={robot.id}><div className="fleet-info"><strong>{robot.id}<small>{phaseNames[robot.driver_phase]}</small></strong><span>{robot.order_id ? `Задание ${robot.order_id}` : 'Нет активного задания'}</span></div><button type="button" className="fleet-map-button" aria-pressed={highlightedRobotId === robot.id} onClick={() => selectRobot(robot.id)}>{highlightedRobotId === robot.id ? 'На карте ✓' : 'Показать'}</button><a className="driver-link" href={`?view=driver&vehicle=${robot.id}`} target="_blank" rel="noreferrer">Планшет ↗</a><button className="stop-button" aria-label={`${robot.status === 'stopped' ? 'Продолжить' : 'Остановить'} ${robot.id}`} disabled={busy || connection !== 'online'} onClick={() => command(`/api/robots/${robot.id}/${robot.status === 'stopped' ? 'resume' : 'stop'}`)}>{robot.status === 'stopped' ? '▶' : 'Ⅱ'}</button></div>)}
               </div>
             </section>
           </div>
           <section className="panel inventory-panel" role={activePanel === 'inventory' ? 'dialog' : undefined} aria-modal={activePanel === 'inventory' ? true : undefined} aria-hidden={activePanel !== 'inventory'} aria-labelledby="inventory-panel-title">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">ЗАПАСЫ И РЕЗЕРВЫ</p><h2 id="inventory-panel-title">Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span></div>
+            <div className="panel-heading compact-heading"><div><h2 id="inventory-panel-title">Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span></div>
             <div className="inventory-list">
-              {inventory.map((item) => <div className="inventory-row" key={item.id}><span className={`stock-box ${item.status}`}>▧</span><div className="inventory-info"><strong>{item.name}</strong><span>{item.product_id || item.id} · {item.quantity} шт. · {formatDimensions(item.length_mm, item.width_mm, item.height_mm)} · {warehouse!.storage_locations.find(location => location.id === item.location_id)?.address || 'без адреса'}</span></div><div className={`stock-status ${item.status}`}>{item.quantity - Object.values(item.reservations).reduce((sum, amount) => sum + amount, 0)} доступно</div></div>)}
+              {inventory.map((item) => <div className="inventory-row" key={item.id}><div className="inventory-info"><strong>{item.name}</strong><span>{item.product_id || item.id} · {item.quantity} шт. · {formatDimensions(item.length_mm, item.width_mm, item.height_mm)} · {warehouse!.storage_locations.find(location => location.id === item.location_id)?.address || 'без адреса'}</span></div><div className={`stock-status ${item.status}`}>{item.quantity - Object.values(item.reservations).reduce((sum, amount) => sum + amount, 0)} доступно</div></div>)}
             </div>
           </section>
         </section>
@@ -418,11 +416,11 @@ function App() {
         <aside className="side-column">
 
           <section className="panel control-panel" role={activePanel === 'control' ? 'dialog' : undefined} aria-modal={activePanel === 'control' ? true : undefined} aria-hidden={activePanel !== 'control'} aria-labelledby="control-panel-title">
-            <div className="panel-heading compact-heading"><div><p className="eyebrow">СИМУЛЯЦИЯ</p><h2 id="control-panel-title">Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /></div>
+            <div className="panel-heading compact-heading"><div><h2 id="control-panel-title">Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /></div>
             <p className="control-copy">{state.running ? 'Откройте планшет водителя: примите задание, подтвердите забор и доставку. Движение моделируется автоматически.' : 'Запустите симуляцию, чтобы начать складскую операцию.'}</p>
-            <button className={`primary-button ${state.running ? 'pause-action' : ''}`} disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}><span>{state.running ? 'Ⅱ' : '▶'}</span>{state.running ? 'Приостановить' : 'Начать симуляцию'}</button>
-            <button className="congestion-button" disabled={busy || connection !== 'online' || !state.can_create_congestion} onClick={() => command('/api/simulation/congestion')}>⚠ <span>Смоделировать затор</span></button>
-            <button className="secondary-button" disabled={busy || connection !== 'online'} onClick={() => { if (window.confirm('Начать заново? Задания, подтверждения и журнал текущей демонстрации будут сброшены.')) void command('/api/simulation/reset') }}>↺ <span>Сбросить склад</span></button>
+            <button className={`primary-button ${state.running ? 'pause-action' : ''}`} disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Приостановить' : 'Начать симуляцию'}</button>
+            <button className="congestion-button" disabled={busy || connection !== 'online' || !state.can_create_congestion} onClick={() => command('/api/simulation/congestion')}>Смоделировать затор</button>
+            <button className="secondary-button" disabled={busy || connection !== 'online'} onClick={() => { if (window.confirm('Начать заново? Задания, подтверждения и журнал текущей демонстрации будут сброшены.')) void command('/api/simulation/reset') }}>Сбросить склад</button>
             <button className="secondary-button" disabled={busy || connection !== 'online' || !warehouse!.closed_cells.length} onClick={() => command('/api/aisles/reopen')}>Открыть проходы ({warehouse!.closed_cells.length})</button>
           </section>
 
@@ -434,7 +432,7 @@ function App() {
               : <p>Сервер не передал данные планирования.</p>}
           </section>
 
-          <div className="footnote"><span className="secure-icon">◇</span> СИМУЛЯЦИЯ · ВИРТУАЛЬНЫЙ СКЛАД</div>
+          <div className="footnote">Виртуальный склад</div>
         </aside>
         </>}
       </main>
@@ -454,13 +452,20 @@ function summarizeDecisionFacts(value: unknown): string {
   return ''
 }
 
-function Metric({ label, value, accent, icon }: { label: string; value: string; accent: string; icon: string }) {
-  return <div className="metric-card"><div><span className="metric-label">{label}</span><strong>{value}</strong></div><span className={`metric-icon ${accent}`}>{icon}</span></div>
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="metric-card"><div><span className="metric-label">{label}</span><strong>{value}</strong></div></div>
 }
 
 function OrderRow({ order, highlightedRobotId, onShowRoute, onSelect }: { order: Order; highlightedRobotId: string | null; onShowRoute: (robotId: string) => void; onSelect: () => void }) {
   const addresses = order.allocations.map(allocation => `${allocation.storage_location_id} (${allocation.quantity} шт.)`).join(' · ')
-  return <div className="order-row"><div className={`order-symbol ${order.status === 'completed' ? 'done' : ''}`}>{order.status === 'completed' ? '✓' : '↗'}</div><div className="order-main"><strong><button type="button" className="order-detail-button" onClick={onSelect}>{order.id} ↗</button><span>{order.item} · {order.quantity} шт.</span></strong><small>{order.length_mm && order.width_mm && order.height_mm ? `${formatDimensions(order.length_mm, order.width_mm, order.height_mm)} · ` : ''}{order.robot_id ? `Погрузчик ${order.robot_id}` : 'Ожидает назначения'}{addresses ? ` · ${addresses}` : order.storage_location_id ? ` · ${order.storage_location_id}` : ''}</small></div><div className="order-state"><span className={`order-status ${order.status}`}>{orderNames[order.status]}</span><small>Забор: {order.storage_location_id || order.pickup.join(', ')}<br />Отгрузка: клетка {order.dropoff.join(', ')}</small>{order.robot_id && <button className="order-map-action" type="button" aria-pressed={highlightedRobotId === order.robot_id} onClick={() => onShowRoute(order.robot_id!)}>{highlightedRobotId === order.robot_id ? 'Маршрут выбран' : 'Показать маршрут ↗'}</button>}</div></div>
+  return <div className="order-row">
+    <div className="order-row-heading">
+      <button type="button" className="order-detail-button" onClick={onSelect}>{order.id} <span aria-hidden="true">↗</span></button>
+      <span className={`order-status ${order.status}`}>{orderNames[order.status]}</span>
+    </div>
+    <div className="order-main"><strong><span>{order.item} · {order.quantity} шт.</span></strong><small>{order.length_mm && order.width_mm && order.height_mm ? `${formatDimensions(order.length_mm, order.width_mm, order.height_mm)} · ` : ''}{order.robot_id ? `Погрузчик ${order.robot_id}` : 'Ожидает назначения'}{addresses ? ` · ${addresses}` : order.storage_location_id ? ` · ${order.storage_location_id}` : ''}</small></div>
+    <div className="order-state"><small>Забор: {order.storage_location_id || order.pickup.join(', ')}<br />Отгрузка: клетка {order.dropoff.join(', ')}</small>{order.robot_id && <button className="order-map-action" type="button" aria-pressed={highlightedRobotId === order.robot_id} onClick={() => onShowRoute(order.robot_id!)}>{highlightedRobotId === order.robot_id ? 'Маршрут выбран' : 'Показать маршрут ↗'}</button>}</div>
+  </div>
 }
 
 const phaseNames: Record<Robot['driver_phase'], string> = {
@@ -503,15 +508,15 @@ function DriverTablet({ robot, robots, order, cells, physicalScale, running, bus
   return <>
     {taskOpen && createPortal(<div className="driver-task-backdrop" aria-hidden="true" onMouseDown={event => { if (event.target === event.currentTarget) setTaskOpen(false) }} />, document.body)}
     <section className={`driver-tablet ${taskOpen ? 'task-dialog-open' : ''}`}>
-    <header className="tablet-header"><div><div className="tablet-brand"><span className="brand-mark">W</span><strong>ПЛАНШЕТ ВОДИТЕЛЯ</strong></div><label className="vehicle-select">Погрузчик <select value={robot.id} onChange={(event) => { setTaskOpen(false); onSelect(event.target.value) }}>{robots.map((vehicle) => <option key={vehicle.id}>{vehicle.id}</option>)}</select></label><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={taskOpen} onClick={() => setTaskOpen(true)}><span>Текущее задание</span><b>{order?.id ?? 'Ожидает'}</b></button></div><div className="tablet-live">{online ? '● Подключён' : '○ Нет связи'} · ДЕМО</div></header>
+    <header className="tablet-header"><div><div className="tablet-brand"><span className="brand-mark">W</span><strong>Планшет водителя</strong></div><label className="vehicle-select">Погрузчик <select value={robot.id} onChange={(event) => { setTaskOpen(false); onSelect(event.target.value) }}>{robots.map((vehicle) => <option key={vehicle.id}>{vehicle.id}</option>)}</select></label><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={taskOpen} onClick={() => setTaskOpen(true)}><span>Текущее задание</span><b>{order?.id ?? 'Ожидает'}</b></button></div><div className="tablet-live">{online ? '● Подключён' : '○ Нет связи'}</div></header>
     {!running && <div className="workflow-notice driver-pause-notice">Движение на паузе. Диспетчер может запустить или продолжить симуляцию. Подтверждения доступны.</div>}
     <div className="tablet-content">
-      <section className="tablet-task panel" role={taskOpen ? 'dialog' : undefined} aria-modal={taskOpen ? true : undefined} aria-hidden={!taskOpen} aria-labelledby="driver-task-title"><div className="task-kicker"><span id="driver-task-title">ТЕКУЩЕЕ ЗАДАНИЕ</span><span className={`robot-status-pill ${robot.status}`}>{robot.stopped_by_operator ? 'Остановлен' : phaseNames[robot.driver_phase]}</span>{taskOpen && <button className="driver-task-close" type="button" aria-label="Закрыть задание" onClick={() => setTaskOpen(false)}>×</button>}</div>
+      <section className="tablet-task panel" role={taskOpen ? 'dialog' : undefined} aria-modal={taskOpen ? true : undefined} aria-hidden={!taskOpen} aria-labelledby="driver-task-title"><div className="task-kicker"><span id="driver-task-title">Текущее задание</span><span className={`robot-status-pill ${robot.status}`}>{robot.stopped_by_operator ? 'Остановлен' : phaseNames[robot.driver_phase]}</span>{taskOpen && <button className="driver-task-close" type="button" aria-label="Закрыть задание" onClick={() => setTaskOpen(false)}>×</button>}</div>
         <h1>{order?.id ?? 'Ожидание задания'}</h1><p className="task-action">{phaseNames[robot.driver_phase]}</p>
         <p className="driver-instruction">{robot.stopped_by_operator ? 'Движение остановлено. Продолжите работу, когда будете готовы.' : instructions[robot.driver_phase]}</p>
-        {order && <><div className="task-product"><span className="stock-box">▧</span><div><small>ТОВАР · {order.product_id} · {order.quantity} шт.</small><strong>{order.item}</strong><small>Размер коробки · {order.length_mm != null && order.width_mm != null && order.height_mm != null ? formatDimensions(order.length_mm, order.width_mm, order.height_mm) : 'не указан'}</small><small>Адрес отбора · {order.storage_location_id || 'назначается'}</small>{currentAllocation?.placement_snapshot.length ? <small>Координаты коробок · {currentAllocation.placement_snapshot.map(position => formatCoordinates(position.x_mm, position.y_mm)).join(' · ')}</small> : null}</div></div>
+        {order && <><div className="task-product"><span className="stock-box">▧</span><div><small>Товар · {order.product_id} · {order.quantity} шт.</small><strong>{order.item}</strong><small>Размер коробки · {order.length_mm != null && order.width_mm != null && order.height_mm != null ? formatDimensions(order.length_mm, order.width_mm, order.height_mm) : 'не указан'}</small><small>Адрес отбора · {order.storage_location_id || 'назначается'}</small>{currentAllocation?.placement_snapshot.length ? <small>Координаты коробок · {currentAllocation.placement_snapshot.map(position => formatCoordinates(position.x_mm, position.y_mm)).join(' · ')}</small> : null}</div></div>
         <ol className="task-steps">{['Принять', 'К товару', 'Забрать', 'К отгрузке', 'Доставить'].map((label, index) => <li key={label} className={index === step ? 'current' : index < step ? 'done' : ''}><b>{index < step ? '✓' : index + 1}</b>{label}</li>)}</ol>
-        <div className="task-route"><div><span className="route-marker pickup-marker">A</span><small>ЗАБОР</small><strong>{order.pickup.join(' · ')}</strong></div><span className="route-arrow">→</span><div><span className="route-marker drop-marker">B</span><small>ДОСТАВКА</small><strong>{order.dropoff.join(' · ')}</strong></div></div></>}
+        <div className="task-route"><div><span className="route-marker pickup-marker">A</span><small>Забор</small><strong>{order.pickup.join(' · ')}</strong></div><span className="route-arrow">→</span><div><span className="route-marker drop-marker">B</span><small>Доставка</small><strong>{order.dropoff.join(' · ')}</strong></div></div></>}
         <div className="tablet-actions">
           {action && order && <button className="tablet-primary" disabled={busy || robot.stopped_by_operator} onClick={() => onCommand(`/api/robots/${robot.id}/driver-action`, { order_id: order.id, action: action.command })}>{action.label}</button>}
           <button className="tablet-secondary" disabled={busy || (!order && robot.driver_phase !== 'returning')} onClick={() => onCommand(`/api/robots/${robot.id}/${robot.stopped_by_operator ? 'resume' : 'stop'}`)}>{robot.stopped_by_operator ? '▶ Продолжить' : 'Ⅱ Приостановить движение'}</button>
@@ -519,10 +524,10 @@ function DriverTablet({ robot, robots, order, cells, physicalScale, running, bus
         </div>
         <p className="tablet-hint">В этом режиме движение моделируется. Забор и доставка выполняются только после вашего подтверждения.</p>
       </section>
-      <section className="tablet-map panel"><div className="tablet-map-title"><div><p className="eyebrow">НАВИГАЦИЯ · {robot.id}</p><h2>{destination ? `Цель: ${destination.join(' · ')}` : 'Карта склада'}</h2><small className="tablet-dimensions">Шаг сетки {physicalScale.cellStepM.toFixed(1)} м · габарит {physicalScale.forkliftLengthM.toFixed(1)} × {physicalScale.forkliftWidthM.toFixed(1)} м (демо)</small></div><span className="map-live">{online ? '● На связи' : '○ Нет связи'}</span></div>
+      <section className="tablet-map panel"><div className="tablet-map-title"><div><h2>{destination ? `Цель: ${destination.join(' · ')}` : 'Карта склада'}</h2><small className="tablet-dimensions">Шаг сетки {physicalScale.cellStepM.toFixed(1)} м · габарит {physicalScale.forkliftLengthM.toFixed(1)} × {physicalScale.forkliftWidthM.toFixed(1)} м (демо)</small></div><span className="map-live">{online ? '● На связи' : '○ Нет связи'}</span></div>
       {robot.status === 'waiting' && ['to_pickup', 'to_dropoff', 'returning'].includes(robot.driver_phase) && <div className="workflow-notice">Свободного пути нет. Ожидайте открытия прохода диспетчером.</div>}
       {robot.route_version > 0 && <div className="route-update">Маршрут пересмотрен · версия {robot.route_version}</div>}
-      <div className="map-legend"><span><i className="legend-dot robot-dot" /> Выбранный погрузчик</span><span><i className="legend-box route-dot" /> Ваш маршрут</span><span>Маршрут выбранного погрузчика</span><span>! – перекрытый проход</span></div>
+      <div className="map-legend"><span><i className="legend-dot robot-dot" /> Выбранный погрузчик</span><span><i className="legend-box route-dot" /> Ваш маршрут</span><span><i className="legend-box closed-dot" /> Перекрытый проход</span></div>
       <div className="tablet-scene">{cells}</div><div className="tablet-position"><span><small>ВАША ПОЗИЦИЯ</small><strong>{robot.position.join(' · ')}</strong></span><span><small>КЛЕТОК ДО ЦЕЛИ</small><strong>{robot.route.length || (destination && key(destination) !== key(robot.position) ? '–' : '0')}</strong></span><span><small>ГРУЗ</small><strong>{robot.carrying_item ? 'На борту' : 'Пусто'}</strong></span></div>
       <div className="driver-events" aria-live="polite">{events.filter((event) => event.robot_id === robot.id).slice(0, 3).map((event) => <p key={event.id}>{event.message}</p>)}</div>
       </section>
@@ -588,7 +593,7 @@ function RackDetails({ rack, locations, onClose }: { rack: Rack; locations: Stor
 
   return <div className="rack-drawer-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }} onKeyDown={event => { if (event.key === 'Escape') onClose() }}>
     <section ref={dialogRef} className="rack-drawer" role="dialog" aria-modal="true" aria-labelledby="rack-drawer-title">
-      <header className="rack-dialog-header"><div><p className="rack-dialog-kicker">СКЛАДСКОЕ МЕСТО</p><div className="rack-dialog-title-line"><h2 id="rack-drawer-title">Стеллаж {rack.id}</h2><span className="rack-type-badge">{rack.rack_type_title}</span></div><p className="rack-dialog-purpose">{rack.purpose}</p></div><button type="button" className="rack-dialog-close" aria-label="Закрыть карточку стеллажа" onClick={onClose}>×</button></header>
+      <header className="rack-dialog-header"><div><p className="rack-dialog-kicker">Складское место</p><div className="rack-dialog-title-line"><h2 id="rack-drawer-title">Стеллаж {rack.id}</h2><span className="rack-type-badge">{rack.rack_type_title}</span></div><p className="rack-dialog-purpose">{rack.purpose}</p></div><button type="button" className="rack-dialog-close" aria-label="Закрыть карточку стеллажа" onClick={onClose}>×</button></header>
       <div className="rack-dialog-body">
       <div className="rack-dialog-specs"><span>{formatDimensions(rack.width_mm, rack.depth_mm, rack.height_mm)}</span><i /> <span>{formatCount(rack.levels, 'ярус', 'яруса', 'ярусов')}</span></div>
       <section className="rack-summary" aria-label="Сводка стеллажа">
