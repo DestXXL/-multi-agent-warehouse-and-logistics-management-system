@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEventHandler } from 'react'
 import type { Rack, Robot, Order } from './App'
 import { formatDimensions, formatSquareMillimeters, occupancyPercent } from './units'
 
@@ -28,14 +28,14 @@ function NavIcon({ kind }: { kind: 'map' | 'tablet' | 'layout' }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">{kind === 'map' ? <><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4M7 8h4v5H7zM15 8h2M15 12h2" /></> : kind === 'tablet' ? <><rect x="5" y="2" width="14" height="20" rx="2" /><path d="M9 6h6M11 18h2" /></> : <><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></>}</svg>
 }
 
-export function ObjectInspector({ rack, robot, order, phase, status, isOpen, onClose, onRackDetails }: { rack?: Rack; robot?: Robot; order?: Order; phase?: string; status?: string; isOpen: boolean; onClose: () => void; onRackDetails: () => void }) {
+export function ObjectInspector({ rack, robot, order, phase, status, isOpen, onClose, onRackDetails, onDragStart, onDragMove, onDragEnd }: { rack?: Rack; robot?: Robot; order?: Order; phase?: string; status?: string; isOpen: boolean; onClose: () => void; onRackDetails: () => void; onDragStart?: PointerEventHandler<HTMLDivElement>; onDragMove?: PointerEventHandler<HTMLDivElement>; onDragEnd?: PointerEventHandler<HTMLDivElement> }) {
   const panel = useRef<HTMLElement>(null)
   const selection = rack?.id ?? robot?.id ?? order?.id
   useEffect(() => {
     if (selection) panel.current?.scrollIntoView({ block: 'nearest' })
   }, [selection])
-  return <section ref={panel} className={`panel object-inspector ${(rack || robot || order) ? 'has-selection' : ''}`} role={isOpen && selection ? 'dialog' : undefined} aria-modal={isOpen && selection ? true : undefined} aria-hidden={!isOpen} aria-label="Выбранный объект">
-    <div className="inspector-heading"><div><span className="inspector-type">{rack ? 'Стеллаж' : robot ? 'Погрузчик' : order ? 'Заказ' : 'Контекст объекта'}</span><h2>{rack?.id ?? robot?.id ?? order?.id ?? 'Выберите объект'}</h2></div>{(rack || robot || order) && <button className="icon-button" aria-label="Закрыть окно объекта" onClick={onClose}>×</button>}</div>
+  return <section ref={panel} className={`panel object-inspector ${(rack || robot || order) ? 'has-selection' : ''}`} role={isOpen && selection ? 'dialog' : undefined} aria-hidden={!isOpen} aria-label="Выбранный объект">
+    <div className="inspector-heading" onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd} onPointerCancel={onDragEnd}><div><span className="inspector-type">{rack ? 'Стеллаж' : robot ? 'Погрузчик' : order ? 'Заказ' : 'Контекст объекта'}</span><h2>{rack?.id ?? robot?.id ?? order?.id ?? 'Выберите объект'}</h2></div>{(rack || robot || order) && <button className="icon-button" aria-label="Закрыть окно объекта" onClick={onClose}>×</button>}</div>
     {rack ? <>
       <div className="rack-elevation" role="img" aria-label={`Фасад стеллажа: ${rack.levels} ярусов, ${formatDimensions(rack.width_mm, rack.depth_mm, rack.height_mm)}`}>
         <svg viewBox={`0 0 ${rack.width_mm + 120} ${rack.height_mm + 120}`} preserveAspectRatio="xMidYMid meet">

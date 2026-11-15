@@ -8,6 +8,9 @@ import './rack-details.css'
 import './control-center.css'
 import './responsive.css'
 import './rack-modal.css'
+import './design-showcase.css'
+
+document.documentElement.dataset.design = 'artdeco'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

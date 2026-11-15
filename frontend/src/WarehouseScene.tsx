@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { Rack, Robot, StorageLocation } from './App'
 import { findAisleLabels } from './scene-geometry'
 import { formatDimensions, formatPercent, occupancyPercent } from './units'
@@ -19,6 +19,9 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
   const [hovered, setHovered] = useState<string | null>(null)
   const [level, setLevel] = useState(1)
   const [showDimensions, setShowDimensions] = useState(false)
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number } | null>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const resizeDrag = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   const aisles = useMemo(() => findAisleLabels(w, scale.cellStepM, scale.forkliftWidthM), [w.racks, w.obstacles, scale.cellStepM, scale.forkliftWidthM])
   const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null)
   const svg = useRef<SVGSVGElement>(null)
@@ -49,6 +52,27 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
   const center = (p: Point) => `${p[0] * unit + 32},${p[1] * unit + 32}`
   function reset() { setZoom(1); setPan({ x: 0, y: 0 }) }
   function zoomBy(amount: number) { setZoom(current => Math.max(1, Math.min(3, current + amount))) }
+  const beginViewportResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const bounds = viewportRef.current?.getBoundingClientRect()
+    if (!bounds) return
+    resizeDrag.current = { x: event.clientX, y: event.clientY, width: bounds.width, height: bounds.height }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const moveViewportResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!resizeDrag.current) return
+    const maxWidth = Math.max(280, viewportRef.current?.parentElement?.clientWidth ?? window.innerWidth)
+    const maxHeight = Math.max(320, Math.min(window.innerHeight - 150, 1200))
+    setViewportSize({
+      width: Math.max(280, Math.min(maxWidth, resizeDrag.current.width + event.clientX - resizeDrag.current.x)),
+      height: Math.max(320, Math.min(maxHeight, resizeDrag.current.height + event.clientY - resizeDrag.current.y)),
+    })
+  }
+  const endViewportResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    resizeDrag.current = null
+  }
   return <div className="scene-container">
     <div className="scene-toolbar">
       <span className="scene-view-label">Вид сверху <span>· единый масштаб</span></span>
@@ -61,7 +85,7 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
         <button type="button" aria-label="Показать весь склад" title="Показать весь склад" onClick={reset}>↺</button>
       </div>
     </div>
-    <div className="scene-viewport">
+    <div ref={viewportRef} className="scene-viewport" style={viewportSize ? { width: `${viewportSize.width}px`, height: `${viewportSize.height}px` } : undefined}>
       <svg ref={svg} className="warehouse-scene" viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Интерактивная карта склада. Стеллажи и погрузчики доступны клавишей Tab." tabIndex={0}
         onKeyDown={event => {
           if (event.target !== event.currentTarget) return
@@ -114,6 +138,7 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
           {w.robots.map(robot => <Forklift key={robot.id} robot={robot} unit={unit} rw={scale.forkliftWidthM * 1000 * ratio} rh={scale.forkliftLengthM * 1000 * ratio} selected={robot.id === selectedRobot} onSelect={() => onRobot(robot.id)} />)}
         </g>
       </svg>
+      <button type="button" className="scene-resize-handle" aria-label="Изменить размер карты" title="Потяните, чтобы изменить размер карты" onPointerDown={beginViewportResize} onPointerMove={moveViewportResize} onPointerUp={endViewportResize} onPointerCancel={endViewportResize}><span aria-hidden="true">◢</span></button>
       {tip && <div className="scene-tooltip" role="status"><strong>{tip.id} <span>{tip.rack_type_title}</span></strong><p>{formatDimensions(tip.width_mm, tip.depth_mm, tip.height_mm)} · {tip.levels} ярусов</p><p>{formatPercent(occupancyPercent(tip.occupied_locations, tip.location_count))}% мест занято · {tip.free_locations} свободных мест · Подъезд со стороны полок: сверху или снизу</p></div>}
     </div>
     <div className="scene-caption"><span>Перетащите карту · + / − для масштаба</span><span>Грузы: ярус {visibleLevel} · 1 клетка ≈ {scale.cellStepM.toLocaleString('ru')} м</span></div>
