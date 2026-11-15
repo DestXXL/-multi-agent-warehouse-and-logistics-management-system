@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import WarehouseScene from './WarehouseScene'
 import DispatchPanel, { type DispatchState } from './DispatchPanel'
@@ -145,6 +145,8 @@ function App() {
   const [detailRackId, setDetailRackId] = useState<string | null>(null)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [activePanel, setActivePanel] = useState<DashboardPanel | null>(null)
+  const [panelOffset, setPanelOffset] = useState({ x: 0, y: 0 })
+  const panelDrag = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
   const [eventSource, setEventSource] = useState('all')
   const [orderQuery, setOrderQuery] = useState('')
   const [orderStatusFilter, setOrderStatusFilter] = useState<OrderStatusFilter>('all')
@@ -162,11 +164,10 @@ function App() {
   useEffect(() => {
     if (!activePanel) return
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setActivePanel(null) }
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', closeOnEscape)
-    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener('keydown', closeOnEscape) }
+    return () => { window.removeEventListener('keydown', closeOnEscape) }
   }, [activePanel])
+  useEffect(() => { setPanelOffset({ x: 0, y: 0 }); panelDrag.current = null }, [activePanel])
   useEffect(() => {
     const url = new URL(window.location.href)
     url.searchParams.set('view', screen)
@@ -318,8 +319,27 @@ function App() {
   const selectRack = (id: string) => { setSelectedRackId(id); setHighlightedRobotId(null); setSelectedOrderId(null); setActivePanel('object') }
   const selectRobot = (id: string) => { setHighlightedRobotId(id); setSelectedRackId(null); setSelectedOrderId(null); setActivePanel('object') }
   const visibleEvents = state.events.filter(event => eventSource === 'all' || event.source === eventSource)
+  const togglePanel = (panel: DashboardPanel) => setActivePanel(current => current === panel ? null : panel)
+  const startPanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!activePanel || event.button !== 0) return
+    panelDrag.current = { x: event.clientX, y: event.clientY, offsetX: panelOffset.x, offsetY: panelOffset.y }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const movePanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!panelDrag.current) return
+    const nextX = panelDrag.current.offsetX + event.clientX - panelDrag.current.x
+    const nextY = panelDrag.current.offsetY + event.clientY - panelDrag.current.y
+    const maxX = Math.max(0, window.innerWidth / 2 - 120)
+    const maxY = Math.max(0, window.innerHeight / 2 - 80)
+    setPanelOffset({ x: Math.max(-maxX, Math.min(maxX, nextX)), y: Math.max(-maxY, Math.min(maxY, nextY)) })
+  }
+  const endPanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    panelDrag.current = null
+  }
+  const panelStyle = { '--panel-drag-x': `${panelOffset.x}px`, '--panel-drag-y': `${panelOffset.y}px` } as CSSProperties
   return (
-    <div className={`app-shell ${activePanel ? `dialog-${activePanel}` : ''}`}>
+    <div className={`app-shell ${activePanel ? `dialog-${activePanel}` : ''}`} style={panelStyle}>
       <Navigation screen={screen} onChange={nextScreen => { setActivePanel(null); setScreen(nextScreen) }} />
       {detailRackData && createPortal(<RackDetails key={detailRackData.id} rack={detailRackData} locations={warehouse!.storage_locations.filter(location => location.rack_id === detailRackData.id)} onClose={() => setDetailRackId(null)} />, document.body)}
       {activePanel && createPortal(<div className="module-dialog-backdrop" aria-hidden="true" onMouseDown={event => { if (event.target === event.currentTarget) setActivePanel(null) }} />, document.body)}
@@ -365,13 +385,13 @@ function App() {
 
           <nav className="module-launcher" aria-label="Дополнительные панели склада">
             <span className="module-launcher-label">РАЗДЕЛЫ</span>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'orders'} onClick={() => setActivePanel('orders')}><i>↗</i>Заказы<b>{pending}</b></button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'fleet'} onClick={() => setActivePanel('fleet')}><i>✣</i>Техника<b>{robots.length}</b></button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'inventory'} onClick={() => setActivePanel('inventory')}><i>▧</i>Запасы<b>{inventory.length}</b></button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'control'} onClick={() => setActivePanel('control')}><i>▶</i>Управление</button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'agents'} onClick={() => setActivePanel('agents')}><i>◎</i>ИИ и агенты</button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'activity'} onClick={() => setActivePanel('activity')}><i>≋</i>События<b>{visibleEvents.length}</b></button>
-            {selectedRackData || selectedRobot || selectedOrder ? <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'object'} onClick={() => setActivePanel('object')}><i>⌕</i>Выбранный объект</button> : null}
+            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'orders'} onClick={() => togglePanel('orders')}><i>↗</i>Заказы<b>{pending}</b></button>
+            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'fleet'} onClick={() => togglePanel('fleet')}><i>✣</i>Техника<b>{robots.length}</b></button>
+            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'inventory'} onClick={() => togglePanel('inventory')}><i>▧</i>Запасы<b>{inventory.length}</b></button>
+            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'control'} onClick={() => togglePanel('control')}><i>▶</i>Управление</button>
+            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'agents'} onClick={() => togglePanel('agents')}><i>◎</i>ИИ и агенты</button>
+            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'activity'} onClick={() => togglePanel('activity')}><i>≋</i>События<b>{visibleEvents.length}</b></button>
+            {selectedRackData || selectedRobot || selectedOrder ? <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'object'} onClick={() => togglePanel('object')}><i>⌕</i>Выбранный объект</button> : null}
           </nav>
 
           <section className="panel map-panel" id="warehouse-map-panel">
@@ -384,33 +404,33 @@ function App() {
             <WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={highlightedRobotId} onRack={selectRack} onRobot={selectRobot} />
           </section>
 
-          <ObjectInspector rack={selectedRackData} robot={selectedOrder ? undefined : selectedRobot} order={selectedOrder} phase={selectedRobot ? phaseNames[selectedRobot.driver_phase] : undefined} status={selectedOrder ? orderNames[selectedOrder.status] : undefined} isOpen={activePanel === 'object'} onClose={() => { setSelectedRackId(null); setHighlightedRobotId(null); setSelectedOrderId(null); setActivePanel(null) }} onRackDetails={() => { setDetailRackId(selectedRackId); setActivePanel(null) }} />
+          <ObjectInspector rack={selectedRackData} robot={selectedOrder ? undefined : selectedRobot} order={selectedOrder} phase={selectedRobot ? phaseNames[selectedRobot.driver_phase] : undefined} status={selectedOrder ? orderNames[selectedOrder.status] : undefined} isOpen={activePanel === 'object'} onDragStart={startPanelDrag} onDragMove={movePanelDrag} onDragEnd={endPanelDrag} onClose={() => { setSelectedRackId(null); setHighlightedRobotId(null); setSelectedOrderId(null); setActivePanel(null) }} onRackDetails={() => { setDetailRackId(selectedRackId); setActivePanel(null) }} />
           <div className="lower-grid">
-            <section className="panel orders-panel" id="orders" role={activePanel === 'orders' ? 'dialog' : undefined} aria-modal={activePanel === 'orders' ? true : undefined} aria-hidden={activePanel !== 'orders'} aria-labelledby="orders-panel-title">
-              <div className="panel-heading compact-heading"><div><h2 id="orders-panel-title">Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span></div>
+            <section className="panel orders-panel" id="orders" role={activePanel === 'orders' ? 'dialog' : undefined} aria-hidden={activePanel !== 'orders'} aria-labelledby="orders-panel-title">
+              <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="orders-panel-title">Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span></div>
               <div className="order-tools"><div className="order-search"><input value={orderQuery} onChange={event => setOrderQuery(event.target.value)} placeholder="Заказ или товар" aria-label="Поиск заказов" /><button type="button" aria-label="Очистить поиск" onClick={() => setOrderQuery('')} disabled={!orderQuery}>×</button></div><label className="order-filter"><span>Статус</span><select value={orderStatusFilter} onChange={event => setOrderStatusFilter(event.target.value as OrderStatusFilter)} aria-label="Фильтр по статусу"><option value="all">Все</option>{Object.entries(orderNames).map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select></label></div>
               <div className="order-list">
                 {filteredOrders.map((order) => <OrderRow key={order.id} order={order} highlightedRobotId={highlightedRobotId} onShowRoute={showOrderRoute} onSelect={() => { setSelectedOrderId(order.id); setSelectedRackId(null); setHighlightedRobotId(order.robot_id); setActivePanel('object') }} />)}
                 {filteredOrders.length === 0 && <div className="order-empty">Заказы по этому запросу не найдены.</div>}
               </div>
             </section>
-          <section className="panel activity-panel" role={activePanel === 'activity' ? 'dialog' : undefined} aria-modal={activePanel === 'activity' ? true : undefined} aria-hidden={activePanel !== 'activity'} aria-labelledby="activity-panel-title">
-            <div className="panel-heading compact-heading"><div><h2 id="activity-panel-title">Журнал событий</h2></div><span className="activity-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
+          <section className="panel activity-panel" role={activePanel === 'activity' ? 'dialog' : undefined} aria-hidden={activePanel !== 'activity'} aria-labelledby="activity-panel-title">
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="activity-panel-title">Журнал событий</h2></div><span className="activity-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
             <label className="event-filter">Источник <select value={eventSource} onChange={event => setEventSource(event.target.value)}><option value="all">Все события</option>{Object.entries(sourceNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
             <div className="event-list">
               {visibleEvents.slice(0, 30).map((event, index) => <div className="event-row" key={event.id}><div className={`event-line ${event.source}`}><i /></div><div className="event-copy"><div><span className={`source-label ${event.source}`}>{sourceNames[event.source] ?? event.source}</span><time>{new Date(event.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time></div><p>{event.message}</p></div>{index === 0 && state.running && <span className="new-event">Сейчас</span>}</div>)}
             </div>
             <div className="all-events">Показано {Math.min(30, visibleEvents.length)} из {visibleEvents.length} событий</div>
           </section>
-            <section className="panel fleet-panel" role={activePanel === 'fleet' ? 'dialog' : undefined} aria-modal={activePanel === 'fleet' ? true : undefined} aria-hidden={activePanel !== 'fleet'} aria-labelledby="fleet-panel-title">
-            <div className="panel-heading compact-heading"><div><h2 id="fleet-panel-title">Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span></div>
+            <section className="panel fleet-panel" role={activePanel === 'fleet' ? 'dialog' : undefined} aria-hidden={activePanel !== 'fleet'} aria-labelledby="fleet-panel-title">
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="fleet-panel-title">Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span></div>
               <div className="fleet-list">
                 {robots.map((robot) => <div className={`fleet-row ${highlightedRobotId === robot.id ? 'is-selected' : ''}`} key={robot.id}><div className="fleet-info"><strong>{robot.id}<small>{phaseNames[robot.driver_phase]}</small></strong><span>{robot.order_id ? `Задание ${robot.order_id}` : 'Нет активного задания'}</span></div><button type="button" className="fleet-map-button" aria-pressed={highlightedRobotId === robot.id} onClick={() => selectRobot(robot.id)}>{highlightedRobotId === robot.id ? 'На карте ✓' : 'Показать'}</button><a className="driver-link" href={`?view=driver&vehicle=${robot.id}`} target="_blank" rel="noreferrer">Планшет ↗</a><button className="stop-button" aria-label={`${robot.status === 'stopped' ? 'Продолжить' : 'Остановить'} ${robot.id}`} disabled={busy || connection !== 'online'} onClick={() => command(`/api/robots/${robot.id}/${robot.status === 'stopped' ? 'resume' : 'stop'}`)}>{robot.status === 'stopped' ? '▶' : 'Ⅱ'}</button></div>)}
               </div>
             </section>
           </div>
-          <section className="panel inventory-panel" role={activePanel === 'inventory' ? 'dialog' : undefined} aria-modal={activePanel === 'inventory' ? true : undefined} aria-hidden={activePanel !== 'inventory'} aria-labelledby="inventory-panel-title">
-            <div className="panel-heading compact-heading"><div><h2 id="inventory-panel-title">Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span></div>
+          <section className="panel inventory-panel" role={activePanel === 'inventory' ? 'dialog' : undefined} aria-hidden={activePanel !== 'inventory'} aria-labelledby="inventory-panel-title">
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="inventory-panel-title">Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span></div>
             <div className="inventory-list">
               {inventory.map((item) => <div className="inventory-row" key={item.id}><div className="inventory-info"><strong>{item.name}</strong><span>{item.product_id || item.id} · {item.quantity} шт. · {formatDimensions(item.length_mm, item.width_mm, item.height_mm)} · {warehouse!.storage_locations.find(location => location.id === item.location_id)?.address || 'без адреса'}</span></div><div className={`stock-status ${item.status}`}>{item.quantity - Object.values(item.reservations).reduce((sum, amount) => sum + amount, 0)} доступно</div></div>)}
             </div>
@@ -419,8 +439,8 @@ function App() {
 
         <aside className="side-column">
 
-          <section className="panel control-panel" role={activePanel === 'control' ? 'dialog' : undefined} aria-modal={activePanel === 'control' ? true : undefined} aria-hidden={activePanel !== 'control'} aria-labelledby="control-panel-title">
-            <div className="panel-heading compact-heading"><div><h2 id="control-panel-title">Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /></div>
+          <section className="panel control-panel" role={activePanel === 'control' ? 'dialog' : undefined} aria-hidden={activePanel !== 'control'} aria-labelledby="control-panel-title">
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="control-panel-title">Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /></div>
             <p className="control-copy">{state.running ? 'Откройте планшет водителя: примите задание, подтвердите забор и доставку. Движение моделируется автоматически.' : 'Запустите симуляцию, чтобы начать складскую операцию.'}</p>
             <button className={`primary-button ${state.running ? 'pause-action' : ''}`} disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Приостановить' : 'Начать симуляцию'}</button>
             <button className="congestion-button" disabled={busy || connection !== 'online' || !state.can_create_congestion} onClick={() => command('/api/simulation/congestion')}>Смоделировать затор</button>
@@ -428,8 +448,8 @@ function App() {
             <button className="secondary-button" disabled={busy || connection !== 'online' || !warehouse!.closed_cells.length} onClick={() => command('/api/aisles/reopen')}>Открыть проходы ({warehouse!.closed_cells.length})</button>
           </section>
 
-          <section className="panel agent-panel" role={activePanel === 'agents' ? 'dialog' : undefined} aria-modal={activePanel === 'agents' ? true : undefined} aria-hidden={activePanel !== 'agents'} aria-labelledby="agents-panel-title">
-            <div className="panel-heading compact-heading"><div><h2 id="agents-panel-title">ИИ и агенты</h2></div></div>
+          <section className="panel agent-panel" role={activePanel === 'agents' ? 'dialog' : undefined} aria-hidden={activePanel !== 'agents'} aria-labelledby="agents-panel-title">
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="agents-panel-title">ИИ и агенты</h2></div></div>
             {state.dispatch ? <DispatchPanel api={API} dispatch={state.dispatch} disabled={busy || connection !== 'online'}
               onMode={mode => void command('/api/dispatch/mode', { mode })}
               targets={[...warehouse!.orders.map(order => order.id), ...robots.map(robot => robot.id)]} />
@@ -483,14 +503,33 @@ function DriverTablet({ robot, robots, order, cells, physicalScale, running, bus
   onSelect: (id: string) => void; onCommand: (path: string, body?: unknown) => Promise<void>;
 }) {
   const [taskOpen, setTaskOpen] = useState(false)
+  const [taskOffset, setTaskOffset] = useState({ x: 0, y: 0 })
+  const taskDrag = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
   useEffect(() => {
     if (!taskOpen) return
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setTaskOpen(false) }
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', closeOnEscape)
-    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener('keydown', closeOnEscape) }
+    return () => { window.removeEventListener('keydown', closeOnEscape) }
   }, [taskOpen])
+  useEffect(() => { setTaskOffset({ x: 0, y: 0 }); taskDrag.current = null }, [taskOpen])
+  const startTaskDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!taskOpen || event.button !== 0 || (event.target as HTMLElement).closest('button')) return
+    taskDrag.current = { x: event.clientX, y: event.clientY, offsetX: taskOffset.x, offsetY: taskOffset.y }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const moveTaskDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!taskDrag.current) return
+    const nextX = taskDrag.current.offsetX + event.clientX - taskDrag.current.x
+    const nextY = taskDrag.current.offsetY + event.clientY - taskDrag.current.y
+    const maxX = Math.max(0, window.innerWidth / 2 - 120)
+    const maxY = Math.max(0, window.innerHeight / 2 - 80)
+    setTaskOffset({ x: Math.max(-maxX, Math.min(maxX, nextX)), y: Math.max(-maxY, Math.min(maxY, nextY)) })
+  }
+  const endTaskDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    taskDrag.current = null
+  }
+  const taskStyle = { '--task-drag-x': `${taskOffset.x}px`, '--task-drag-y': `${taskOffset.y}px` } as CSSProperties
   const actions = {
     offered: { command: 'accept', label: 'Принять задание' },
     confirm_pickup: { command: 'pickup', label: 'Подтверждаю: товар забран' },
@@ -510,12 +549,11 @@ function DriverTablet({ robot, robots, order, cells, physicalScale, running, bus
     confirm_delivery: 'Вы у места доставки. Разгрузите товар и подтвердите завершение.',
   }
   return <>
-    {taskOpen && createPortal(<div className="driver-task-backdrop" aria-hidden="true" onMouseDown={event => { if (event.target === event.currentTarget) setTaskOpen(false) }} />, document.body)}
     <section className={`driver-tablet ${taskOpen ? 'task-dialog-open' : ''}`}>
     <header className="tablet-header"><div><div className="tablet-brand"><span className="brand-mark">W</span><strong>Планшет водителя</strong></div><label className="vehicle-select">Погрузчик <select value={robot.id} onChange={(event) => { setTaskOpen(false); onSelect(event.target.value) }}>{robots.map((vehicle) => <option key={vehicle.id}>{vehicle.id}</option>)}</select></label><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={taskOpen} onClick={() => setTaskOpen(true)}><span>Текущее задание</span><b>{order?.id ?? 'Ожидает'}</b></button></div><div className="tablet-live">{online ? '● Подключён' : '○ Нет связи'}</div></header>
     {!running && <div className="workflow-notice driver-pause-notice">Движение на паузе. Диспетчер может запустить или продолжить симуляцию. Подтверждения доступны.</div>}
     <div className="tablet-content">
-      <section className="tablet-task panel" role={taskOpen ? 'dialog' : undefined} aria-modal={taskOpen ? true : undefined} aria-hidden={!taskOpen} aria-labelledby="driver-task-title"><div className="task-kicker"><span id="driver-task-title">Текущее задание</span><span className={`robot-status-pill ${robot.status}`}>{robot.stopped_by_operator ? 'Остановлен' : phaseNames[robot.driver_phase]}</span>{taskOpen && <button className="driver-task-close" type="button" aria-label="Закрыть задание" onClick={() => setTaskOpen(false)}>×</button>}</div>
+      <section className="tablet-task panel" role={taskOpen ? 'dialog' : undefined} aria-hidden={!taskOpen} aria-labelledby="driver-task-title" style={taskStyle}><div className="task-kicker" onPointerDown={startTaskDrag} onPointerMove={moveTaskDrag} onPointerUp={endTaskDrag} onPointerCancel={endTaskDrag}><span id="driver-task-title">Текущее задание</span><span className={`robot-status-pill ${robot.status}`}>{robot.stopped_by_operator ? 'Остановлен' : phaseNames[robot.driver_phase]}</span>{taskOpen && <button className="driver-task-close" type="button" aria-label="Закрыть задание" onClick={() => setTaskOpen(false)}>×</button>}</div>
         <h1>{order?.id ?? 'Ожидание задания'}</h1><p className="task-action">{phaseNames[robot.driver_phase]}</p>
         <p className="driver-instruction">{robot.stopped_by_operator ? 'Движение остановлено. Продолжите работу, когда будете готовы.' : instructions[robot.driver_phase]}</p>
         {order && <><div className="task-product"><span className="stock-box">▧</span><div><small>Товар · {order.product_id} · {order.quantity} шт.</small><strong>{order.item}</strong><small>Размер коробки · {order.length_mm != null && order.width_mm != null && order.height_mm != null ? formatDimensions(order.length_mm, order.width_mm, order.height_mm) : 'не указан'}</small><small>Адрес отбора · {order.storage_location_id || 'назначается'}</small>{currentAllocation?.placement_snapshot.length ? <small>Координаты коробок · {currentAllocation.placement_snapshot.map(position => formatCoordinates(position.x_mm, position.y_mm)).join(' · ')}</small> : null}</div></div>
@@ -549,6 +587,8 @@ function formatCount(value: number, one: string, few: string, many: string) {
 
 function RackDetails({ rack, locations, onClose }: { rack: Rack; locations: StorageLocation[]; onClose: () => void }) {
   const dialogRef = useRef<HTMLElement>(null)
+  const [drawerOffset, setDrawerOffset] = useState({ x: 0, y: 0 })
+  const drawerDrag = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null
     dialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
@@ -584,20 +624,28 @@ function RackDetails({ rack, locations, onClose }: { rack: Rack; locations: Stor
   }
   const showAllLevels = expandedLevels.size !== levels.length
 
-  useEffect(() => {
-    const previousBodyOverflow = document.body.style.overflow
-    const previousRootOverflow = document.documentElement.style.overflow
-    document.body.style.overflow = 'hidden'
-    document.documentElement.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = previousBodyOverflow
-      document.documentElement.style.overflow = previousRootOverflow
-    }
-  }, [])
+  const startDrawerDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return
+    drawerDrag.current = { x: event.clientX, y: event.clientY, offsetX: drawerOffset.x, offsetY: drawerOffset.y }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const moveDrawerDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (!drawerDrag.current) return
+    const nextX = drawerDrag.current.offsetX + event.clientX - drawerDrag.current.x
+    const nextY = drawerDrag.current.offsetY + event.clientY - drawerDrag.current.y
+    const maxX = Math.max(0, window.innerWidth / 2 - 120)
+    const maxY = Math.max(0, window.innerHeight / 2 - 80)
+    setDrawerOffset({ x: Math.max(-maxX, Math.min(maxX, nextX)), y: Math.max(-maxY, Math.min(maxY, nextY)) })
+  }
+  const endDrawerDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    drawerDrag.current = null
+  }
+  const drawerStyle = { '--rack-drawer-drag-x': `${drawerOffset.x}px`, '--rack-drawer-drag-y': `${drawerOffset.y}px` } as CSSProperties
 
   return <div className="rack-drawer-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }} onKeyDown={event => { if (event.key === 'Escape') onClose() }}>
-    <section ref={dialogRef} className="rack-drawer" role="dialog" aria-modal="true" aria-labelledby="rack-drawer-title">
-      <header className="rack-dialog-header"><div><p className="rack-dialog-kicker">Складское место</p><div className="rack-dialog-title-line"><h2 id="rack-drawer-title">Стеллаж {rack.id}</h2><span className="rack-type-badge">{rack.rack_type_title}</span></div><p className="rack-dialog-purpose">{rack.purpose}</p></div><button type="button" className="rack-dialog-close" aria-label="Закрыть карточку стеллажа" onClick={onClose}>×</button></header>
+    <section ref={dialogRef} className="rack-drawer" role="dialog" aria-labelledby="rack-drawer-title" style={drawerStyle}>
+      <header className="rack-dialog-header" onPointerDown={startDrawerDrag} onPointerMove={moveDrawerDrag} onPointerUp={endDrawerDrag} onPointerCancel={endDrawerDrag}><div><p className="rack-dialog-kicker">Складское место</p><div className="rack-dialog-title-line"><h2 id="rack-drawer-title">Стеллаж {rack.id}</h2><span className="rack-type-badge">{rack.rack_type_title}</span></div><p className="rack-dialog-purpose">{rack.purpose}</p></div><button type="button" className="rack-dialog-close" aria-label="Закрыть карточку стеллажа" onClick={onClose}>×</button></header>
       <div className="rack-dialog-body">
       <div className="rack-dialog-specs"><span>{formatDimensions(rack.width_mm, rack.depth_mm, rack.height_mm)}</span><i /> <span>{formatCount(rack.levels, 'ярус', 'яруса', 'ярусов')}</span></div>
       <section className="rack-summary" aria-label="Сводка стеллажа">

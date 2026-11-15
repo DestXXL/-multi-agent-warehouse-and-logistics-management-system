@@ -23,7 +23,7 @@ export default function LayoutEditor() {
   }, [selectedRack])
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const [fit, setFit] = useState(false)
+  const [fit, setFit] = useState(true)
   const [cellSize, setCellSize] = useState(44)
   async function request(path: string, method = 'GET', body?: unknown) {
     const r = await fetch(api + path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
