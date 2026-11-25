@@ -1,8 +1,10 @@
 """Deterministic agent roles used before an LLM provider is connected."""
 
 from collections import deque
+from heapq import heappop, heappush
 from typing import Callable
 
+from backend.traffic import DIRECTIONS as LANE_DIRECTIONS, permits
 from backend.models import Order, Point, Robot, StockItem, StockAllocation, StorageLocation
 from backend.rack_types import pack_packages
 
@@ -160,6 +162,8 @@ class RobotAgent:
         height: int,
         blocked: set[Point],
         occupied: set[Point],
+        lanes: dict | None = None,
+        roads=None,
     ) -> list[Point] | None:
         queue = deque([(start, [])])
         visited = {start}
@@ -171,6 +175,8 @@ class RobotAgent:
                 neighbor = (point[0] + dx, point[1] + dy)
                 if (
                     neighbor in visited
+                    or (roads is not None and (point, neighbor) not in roads)
+                    or (lanes and not permits(lanes, point, neighbor))
                     or not (0 <= neighbor[0] < width and 0 <= neighbor[1] < height)
                     or neighbor in blocked
                     or neighbor in occupied
@@ -178,6 +184,44 @@ class RobotAgent:
                     continue
                 visited.add(neighbor)
                 queue.append((neighbor, route + [neighbor]))
+        return None
+
+
+    def driving_route(self, start, goal, width, height, blocked, occupied, lanes, heading, roads=None):
+        """A* over position and orientation. A turn costs time just like forward travel."""
+        initial = (start, heading // 90)
+        frontier = [(0, 0, initial)]
+        costs = {initial: 0}
+        parent = {}
+        while frontier:
+            _, cost, state = heappop(frontier)
+            if cost != costs[state]:
+                continue
+            point, facing = state
+            if point == goal:
+                path = []
+                while state != initial:
+                    path.append(state[0])
+                    state = parent[state]
+                return path[::-1]
+            for direction, (dx, dy) in enumerate(self.DIRECTIONS):
+                nxt = point[0] + dx, point[1] + dy
+                if not (0 <= nxt[0] < width and 0 <= nxt[1] < height):
+                    continue
+                if roads is not None and (point, nxt) not in roads:
+                    continue
+                if nxt in blocked or nxt in occupied or not permits(lanes, point, nxt):
+                    continue
+                turns = abs(direction - facing)
+                # Prefer a marked through lane over an equally convenient unmarked aisle.
+                on_lane = LANE_DIRECTIONS.get(lanes.get(point)) == (dx, dy)
+                candidate = cost + 20 + 10 * min(turns, 4 - turns) + (0 if on_lane else 2)
+                key = nxt, direction
+                if candidate >= costs.get(key, float("inf")):
+                    continue
+                parent[key], costs[key] = state, candidate
+                remaining = abs(nxt[0] - goal[0]) + abs(nxt[1] - goal[1])
+                heappush(frontier, (candidate + 20 * remaining, candidate, key))
         return None
 
 

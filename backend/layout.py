@@ -6,11 +6,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from backend.models import Warehouse, Robot, Rack, StorageLocation, rack_pickup_faces
 from backend.rack_types import RACK_TYPES, rack_for_position, storage_address
 
+from backend.traffic import DIRECTIONS, permits
+
 class Cell(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     x: int = Field(ge=0)
     y: int = Field(ge=0)
-    kind: Literal["rack", "wall", "pickup", "shipping", "robot"]
+    kind: Literal["rack", "wall", "pickup", "shipping", "robot", "east", "west", "north", "south"]
     levels: int = Field(default=1, ge=1, le=12)
     id: str | None = Field(default=None, min_length=1, max_length=40)
     rack_type: str | None = None
@@ -98,14 +100,18 @@ class Layout(BaseModel):
         blocked = {(c.x, c.y) for c in self.cells if c.kind in ("rack", "wall")}
         targets = [(c.x, c.y) for c in self.cells if c.kind in ("robot", "shipping")]
         if targets and not errors:
-            reached = {targets[0]}
-            queue = deque(reached)
-            while queue:
-                x, y = queue.popleft()
-                for q in [(x+1,y),(x-1,y),(x,y+1),(x,y-1)]:
-                    if 0 <= q[0] < self.width and 0 <= q[1] < self.height and q not in blocked and q not in reached:
-                        reached.add(q)
-                        queue.append(q)
+            lanes = {(c.x, c.y): c.kind for c in self.cells if c.kind in DIRECTIONS}
+            def reachable(reverse):
+                reached = {targets[0]}
+                queue = deque(reached)
+                while queue:
+                    x, y = queue.popleft()
+                    for q in [(x+1,y),(x-1,y),(x,y+1),(x,y-1)]:
+                        if permits(lanes, q if reverse else (x,y), (x,y) if reverse else q) and 0 <= q[0] < self.width and 0 <= q[1] < self.height and q not in blocked and q not in reached:
+                            reached.add(q)
+                            queue.append(q)
+                return reached
+            reached = reachable(False) & reachable(True)
             if any(t not in reached for t in targets):
                 errors.append("Стоянки и отгрузка должны соединяться проходами")
             for c in self.cells:
@@ -146,11 +152,13 @@ class Layout(BaseModel):
         return Warehouse(width=self.width, height=self.height,
             obstacles=points("rack") + points("wall"), pickup_points=[],
             shipping_points=points("shipping"), robots=[Robot(id=f"R-{i:02d}", position=p, home=p) for i,p in enumerate(points("robot"),1)],
-            racks=racks, storage_locations=locations)
+            racks=racks, storage_locations=locations,
+            lanes={(c.x,c.y): c.kind for c in self.cells if c.kind in DIRECTIONS})
 
 
 def from_warehouse(w: Warehouse) -> Layout:
     rack_points = {rack.position for rack in w.racks}
     cells = [Cell(x=r.position[0], y=r.position[1], kind="rack", id=r.id, rack_type=r.rack_type, width_mm=r.width_mm, depth_mm=r.depth_mm, height_mm=r.height_mm, levels=r.levels, positions_per_level=r.positions_per_level) for r in w.racks]
     cells += [Cell(x=x,y=y,kind=k) for k,points in [("wall",[p for p in w.obstacles if p not in rack_points]),("shipping",w.shipping_points),("robot",[r.home for r in w.robots])] for x,y in points]
+    cells.extend(Cell(x=x, y=y, kind=direction) for (x, y), direction in w.lanes.items())
     return Layout(width=w.width,height=w.height,cells=cells)

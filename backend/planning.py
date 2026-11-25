@@ -2,6 +2,7 @@
 
 import httpx
 
+from backend.route_advisor import plan_routes
 from backend import dispatch
 from backend.llm import consult
 from backend.harness import harness_for
@@ -52,6 +53,9 @@ async def planning_pass(sim, client: httpx.AsyncClient | None = None, *, request
                     changed = sim.assign_orders()
     if request_limit is not None and sim.metrics["requests"] >= request_limit:
         client = None
+    if sim.dispatch_mode == "model":
+        zoned = await plan_zone(sim, client)
+        return (await plan_routes(sim, client) if client is not None else False) or zoned or changed
     return await plan_zone(sim, client if use_model else None) or changed
 
 
@@ -69,6 +73,9 @@ async def plan_zone(sim, client) -> bool:
         harness_for(sim).resolve(response, "Принято: план проезда передан симуляции")
         reason = "Выбран один из рассчитанных backend маршрутов."
     else:
+        if mode == "model":
+            harness_for(sim).resolve(response, "План разъезда отклонён")
+            return False
         harness_for(sim).resolve(response, "Отклонено: проезд недоступен; применены правила")
         if mode in ("model", "demo"):
             sim.metrics["fallbacks"] += 1

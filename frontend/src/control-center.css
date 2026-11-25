@@ -226,7 +226,7 @@ h3 { font-size: 16px; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
 /* Fill the whole simulation tick so straight steps join without a dwell. */
-.scene-robot { transition: transform 1000ms linear; }
+.scene-robot { transition: none; }
 .rack-level.open, .rack-level:hover { border-color: #535d60; box-shadow: none; }
 .storage-item:focus-visible { outline-color: var(--accent); }
 .order-empty { color: var(--muted); background: transparent; }
@@ -351,7 +351,7 @@ h3 { font-size: 16px; }
  .object-inspector .rack-elevation svg { height: 80px; }
 }
 
-.robot-orientation { transition: transform 600ms ease-in-out; }
+.robot-orientation { transition: none; }
 .robot-forks { stroke-width: 3; stroke-linecap: square; }
 .scene-robot.picking .robot-loader { animation: fork-loading 1.4s ease-in-out infinite; }
 .package-picking { animation: package-picking 1.4s ease-in-out infinite; }

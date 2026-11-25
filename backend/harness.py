@@ -41,6 +41,7 @@ class Decision(tuple):
 
 
 TOOLS = {
+    "route": {"name": "provide_route", "description": "Построение маршрута погрузчика"},
     "manager": {"name": "select_assignment_plan", "description": "Выбор готового пакета назначений"},
     "zone": {"name": "select_zone_plan", "description": "Выбор рассчитанного разъезда или обхода"},
     "storage": {"name": "select_storage_plan", "description": "Выбор геометрически допустимого размещения"},
@@ -129,7 +130,7 @@ class AgentHarness:
         if self.inflight or (not demo and (now < self.cooldown_until or self.public()["budget_exhausted"])):
             return None
         # Reconsider unchanged autonomous inputs at most once per 30 seconds.
-        if not probe and role in ("manager", "zone") and now-self.seen.get(fingerprint, -100) < 30:
+        if not probe and role in ("manager", "zone", "route") and now-self.seen.get(fingerprint, -100) < 30:
             return None
         self.seen = {k: t for k, t in self.seen.items() if now-t < 30}
         self.seen[fingerprint] = now
@@ -187,7 +188,7 @@ class AgentHarness:
                 selected, reason = result["selected"], result["reason"]
             choices = data.get("plans" if role == "manager" else "options", {})
             expected = 0 if role in ("operator", "robot") else 1
-            if not isinstance(selected, list) or len(selected) != expected or any(not isinstance(k, str) or k not in choices for k in selected):
+            if not isinstance(selected, list) or (not 1 <= len(selected) <= len(choices) if role == "route" else len(selected) != expected) or any(not isinstance(k, str) or k not in choices for k in selected):
                 raise ValueError("invalid selection")
             if not isinstance(reason, str) or not reason.strip():
                 raise ValueError("invalid explanation")

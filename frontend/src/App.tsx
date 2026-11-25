@@ -1,3 +1,6 @@
+import { metricPoint, NODE_SPACING_M } from './units'
+import { serverUrl as API } from './server'
+import InventoryBook, { type Movement } from './InventoryBook'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import WarehouseScene from './WarehouseScene'
@@ -11,6 +14,8 @@ type StoredItem = { id: string; name: string; quantity: number; length_mm: numbe
 export type StorageLocation = { id: string; rack_id: string; level: number; position: number; address: string; enabled: boolean; width_mm: number; depth_mm: number; max_height_mm: number; x_mm: number; y_mm: number; occupied: boolean; package_count: number; free_surface_mm2: number; item: null | { id: string; name: string; quantity: number; reserved_quantity: number; available_quantity: number; length_mm: number; width_mm: number; height_mm: number; rotated: boolean; placement_x_mm: number; placement_y_mm: number; unit_placements: PackagePlacement[] }; items: StoredItem[] }
 
 export type Robot = {
+  position_m?: [number, number]
+  route_remaining_m?: number
   id: string
   position: [number, number]
   route: [number, number][]
@@ -82,7 +87,7 @@ function readPhysicalScale(): PhysicalScale {
   try {
     const saved = JSON.parse(localStorage.getItem('warehouse-visual-scale') || 'null') as Partial<PhysicalScale> | null
     return {
-      cellStepM: typeof saved?.cellStepM === 'number' && saved.cellStepM > 0 ? saved.cellStepM : DEFAULT_PHYSICAL_SCALE.cellStepM,
+      cellStepM: NODE_SPACING_M,
       forkliftLengthM: typeof saved?.forkliftLengthM === 'number' && saved.forkliftLengthM > 0 ? saved.forkliftLengthM : DEFAULT_PHYSICAL_SCALE.forkliftLengthM,
       forkliftWidthM: typeof saved?.forkliftWidthM === 'number' && saved.forkliftWidthM > 0 ? saved.forkliftWidthM : DEFAULT_PHYSICAL_SCALE.forkliftWidthM,
     }
@@ -92,6 +97,7 @@ function readPhysicalScale(): PhysicalScale {
 }
 
 type State = {
+  stock_movements?: Movement[]
   running: boolean
   tick: number
   can_create_congestion: boolean
@@ -112,7 +118,7 @@ type State = {
   dispatch?: DispatchState
 }
 
-const API = `http://${window.location.hostname}:8000`
+
 
 const sourceNames: Record<string, string> = {
   manager: 'Менеджер',
@@ -137,6 +143,9 @@ function key([x, y]: [number, number]) {
 }
 
 function App() {
+  const [openDriverTask] = useState(() => new URLSearchParams(window.location.search).get('task') === 'open')
+  const [stockQuery, setStockQuery] = useState('')
+  const [stockFilter, setStockFilter] = useState('all')
   const [state, setState] = useState<State | null>(null)
   const [connection, setConnection] = useState<'online' | 'offline'>('offline')
   const [error, setError] = useState('')
@@ -247,6 +256,19 @@ function App() {
   const robots = warehouse?.robots ?? []
   const orders = warehouse?.orders ?? []
   const inventory = warehouse?.inventory ?? []
+  const addresses = new Map(warehouse?.storage_locations.map(location => [location.id, location.address]))
+  const stockRows = inventory.map(item => {
+    const reserved = Object.values(item.reservations).reduce((sum, count) => sum + count, 0)
+    const address = addresses.get(item.location_id ?? '') ?? 'без адреса'
+    return { item, address, reserved, available: item.quantity - reserved }
+  })
+  const stockTotal = stockRows.reduce((sum, row) => sum + row.item.quantity, 0)
+  const reservedTotal = stockRows.reduce((sum, row) => sum + row.reserved, 0)
+  const visibleStock = stockRows.filter(({ item, address, available, reserved }) => {
+    const matches = [item.name, item.product_id, item.id, address].join(' ').toLowerCase().includes(stockQuery.trim().toLowerCase())
+    return matches && (stockFilter === 'all' || (stockFilter === 'reserved' ? reserved > 0 : available === 0))
+  })
+
   const completed = orders.filter((order) => order.status === 'completed').length
   const activeRobots = robots.filter((robot) => robot.status === 'moving').length
   const pending = orders.filter((order) => !['completed', 'cancelled'].includes(order.status)).length
@@ -355,16 +377,15 @@ function App() {
         {error && <div className="workflow-error" role="alert">{error}</div>}
         {connection === 'offline' && <div className="workflow-error" role="status">Связь потеряна. Показано последнее известное состояние; команды недоступны.</div>}
         {screen === 'driver' ? (
-          driverRobot ? <DriverTablet robot={driverRobot} robots={robots} order={driverOrder} cells={<WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={driverRobot.id} target={driverOrder ? (['offered', 'to_pickup', 'confirm_pickup'].includes(driverRobot.driver_phase) ? driverOrder.pickup : driverOrder.dropoff) : driverRobot.driver_phase === 'returning' ? driverRobot.home : null} onRack={id => setDetailRackId(id)} onRobot={setDriverId} />} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
+          driverRobot ? <DriverTablet initialTaskOpen={openDriverTask} robot={driverRobot} robots={robots} order={driverOrder} cells={<WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={driverRobot.id} target={driverOrder ? (['offered', 'to_pickup', 'confirm_pickup'].includes(driverRobot.driver_phase) ? driverOrder.pickup : driverOrder.dropoff) : driverRobot.driver_phase === 'returning' ? driverRobot.home : null} onRack={id => setDetailRackId(id)} onRobot={setDriverId} />} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
         ) : <>
         <section className="main-column">
           <div className="page-heading">
-            <div><h1>Диспетчерская</h1><p className="muted">{warehouse!.width} × {warehouse!.height} клеток · {warehouse!.racks.length} стеллажей · ≈ { (warehouse!.width * physicalScale.cellStepM).toLocaleString("ru") } × { (warehouse!.height * physicalScale.cellStepM).toLocaleString("ru") } м</p></div>
-            <span className="workspace-hint">Выберите действие или объект на карте</span>
+            <div><h1>Диспетчерская</h1><p className="muted">{warehouse!.racks.length} стеллажей · ≈ { (warehouse!.width * physicalScale.cellStepM).toLocaleString("ru") } × { (warehouse!.height * physicalScale.cellStepM).toLocaleString("ru") } м</p></div>
           </div>
 
           <div className="metric-row">
-            <Metric label="Техника в работе" value={`${activeRobots} / ${robots.length}`} />
+            <Metric label="В движении" value={`${activeRobots} / ${robots.length}`} />
             <Metric label="Открытые заказы" value={String(pending)} />
             <Metric label="Выполнено за смену" value={String(completed)} />
             <Metric label="Такт симуляции" value={String(state.tick)} />
@@ -399,7 +420,9 @@ function App() {
               <h2>Карта склада</h2>
               <div className="map-actions"><span className="map-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
             </div>
-            <details className="scale-settings"><summary>Масштаб и габариты техники</summary><div className="map-dimension-controls"><label title="Расстояние между центрами соседних клеток">Шаг сетки <span><input type="number" min="0.5" max="20" step="0.1" value={physicalScaleDraft.cellStepM} onChange={event => updatePhysicalScale('cellStepM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, cellStepM: String(physicalScale.cellStepM) }))} /> м</span></label><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Примерный шаг сетки · ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div></details>
+            <ShiftAttention robots={robots} closures={warehouse!.closed_cells} online={connection === 'online'}
+              running={state.running} onVehicle={selectRobot} onClosures={() => setActivePanel('control')} />
+            <details className="scale-settings"><summary>Масштаб и габариты техники</summary><div className="map-dimension-controls"><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div></details>
             <div className="map-legend"><span><i className="legend-dot robot-dot" /> Погрузчик</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> {highlightedRobotId ? `Маршрут ${highlightedRobotId}` : 'Маршрут по выбору'}</span><span><i className="legend-box aisle-dot" /> Проезд · м</span><span className="aisle-warning-legend">Красный – уже погрузчика</span>{highlightedRobotId && <button className="clear-route-button" type="button" onClick={() => setHighlightedRobotId(null)}>Снять выделение</button>}</div>
             <WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={highlightedRobotId} onRack={selectRack} onRobot={selectRobot} />
           </section>
@@ -431,9 +454,22 @@ function App() {
           </div>
           <section className="panel inventory-panel" role={activePanel === 'inventory' ? 'dialog' : undefined} aria-hidden={activePanel !== 'inventory'} aria-labelledby="inventory-panel-title">
             <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="inventory-panel-title">Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span></div>
-            <div className="inventory-list">
-              {inventory.map((item) => <div className="inventory-row" key={item.id}><div className="inventory-info"><strong>{item.name}</strong><span>{item.product_id || item.id} · {item.quantity} шт. · {formatDimensions(item.length_mm, item.width_mm, item.height_mm)} · {warehouse!.storage_locations.find(location => location.id === item.location_id)?.address || 'без адреса'}</span></div><div className={`stock-status ${item.status}`}>{item.quantity - Object.values(item.reservations).reduce((sum, amount) => sum + amount, 0)} доступно</div></div>)}
+            <div className="stock-tools">
+              <p>На складе <b>{stockTotal}</b> · В резерве <b>{reservedTotal}</b> · Доступно <b>{stockTotal - reservedTotal}</b></p>
+              <input type="search" aria-label="Поиск по запасам" placeholder="Название, код товара или адрес" value={stockQuery} onChange={event => setStockQuery(event.target.value)} />
+              <select aria-label="Фильтр остатков" value={stockFilter} onChange={event => setStockFilter(event.target.value)}>
+                <option value="all">Все позиции</option><option value="reserved">Есть резерв</option><option value="empty">Нет доступного остатка</option>
+              </select>
+              {(stockQuery || stockFilter !== 'all') && <button onClick={() => { setStockQuery(''); setStockFilter('all') }}>Сбросить</button>}
             </div>
+            <div className="inventory-list">
+              {visibleStock.map(({ item, address, reserved, available }) => <div className="inventory-row" key={item.id}>
+                <div className="inventory-info"><strong>{item.name}</strong><span>{item.product_id || item.id} · {address} · {formatDimensions(item.length_mm, item.width_mm, item.height_mm)}</span><span>На складе {item.quantity} шт. · В резерве {reserved} шт.</span></div>
+                <div className={`stock-status ${item.status}`}>{available} доступно</div>
+              </div>)}
+              {!visibleStock.length && <p>{inventory.length ? 'По выбранным условиям позиций нет.' : 'На складе пока нет товаров.'}</p>}
+            </div>
+            <InventoryBook<State> rows={stockRows} movements={state.stock_movements ?? []} api={API} online={connection === 'online'} refresh={setState} />
           </section>
         </section>
 
@@ -467,12 +503,12 @@ function App() {
 function summarizeDecisionFacts(value: unknown): string {
   if (Array.isArray(value)) return value.map(row => {
     const facts = row as Record<string, unknown>
-    return `${facts.address}: ${facts.quantity} шт., ${facts.distance_to_shipping_cells} клеток до отгрузки, ${facts.packages_already_stored} шт. уже хранится`
+    return `${facts.address}: ${facts.quantity} шт., ${Number(facts.distance_to_shipping_cells) * NODE_SPACING_M} м до отгрузки, ${facts.packages_already_stored} шт. уже хранится`
   }).join('; ')
   if (!value || typeof value !== 'object') return ''
   const facts = value as Record<string, unknown>
-  if (typeof facts.robot === 'string') return `${facts.robot}, маршрут ${facts.distance} клеток, оценка ${facts.route_score}`
-  if (typeof facts.passes === 'string') return `${facts.passes}, маршрут ${facts.passage_cells} клеток`
+  if (typeof facts.robot === 'string') return `${facts.robot}, маршрут ${Number(facts.distance) * NODE_SPACING_M} м, оценка ${facts.route_score}`
+  if (typeof facts.passes === 'string') return `${facts.passes}, маршрут ${Number(facts.passage_cells) * NODE_SPACING_M} м`
   return ''
 }
 
@@ -488,7 +524,7 @@ function OrderRow({ order, highlightedRobotId, onShowRoute, onSelect }: { order:
       <span className={`order-status ${order.status}`}>{orderNames[order.status]}</span>
     </div>
     <div className="order-main"><strong><span>{order.item} · {order.quantity} шт.</span></strong><small>{order.length_mm && order.width_mm && order.height_mm ? `${formatDimensions(order.length_mm, order.width_mm, order.height_mm)} · ` : ''}{order.robot_id ? `Погрузчик ${order.robot_id}` : 'Ожидает назначения'}{addresses ? ` · ${addresses}` : order.storage_location_id ? ` · ${order.storage_location_id}` : ''}</small></div>
-    <div className="order-state"><small>Забор: {order.storage_location_id || order.pickup.join(', ')}<br />Отгрузка: клетка {order.dropoff.join(', ')}</small>{order.robot_id && <button className="order-map-action" type="button" aria-pressed={highlightedRobotId === order.robot_id} onClick={() => onShowRoute(order.robot_id!)}>{highlightedRobotId === order.robot_id ? 'Маршрут выбран' : 'Показать маршрут ↗'}</button>}</div>
+    <div className="order-state"><small>Забор: {order.storage_location_id || metricPoint(order.pickup)}<br />Отгрузка: {metricPoint(order.dropoff)}</small>{order.robot_id && <button className="order-map-action" type="button" aria-pressed={highlightedRobotId === order.robot_id} onClick={() => onShowRoute(order.robot_id!)}>{highlightedRobotId === order.robot_id ? 'Маршрут выбран' : 'Показать маршрут ↗'}</button>}</div>
   </div>
 }
 
@@ -497,12 +533,34 @@ const phaseNames: Record<Robot['driver_phase'], string> = {
   confirm_pickup: 'Ждёт подтверждения забора', to_dropoff: 'Везёт товар', confirm_delivery: 'Ждёт подтверждения доставки',
 }
 
-function DriverTablet({ robot, robots, order, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
-  robot: Robot; robots: Robot[]; order?: Order; cells: React.ReactNode; physicalScale: PhysicalScale;
+function ShiftAttention({ robots, closures, online, running, onVehicle, onClosures }: {
+  robots: Robot[]; closures: [number, number][]; online: boolean; running: boolean;
+  onVehicle: (id: string) => void; onClosures: () => void;
+}) {
+  const confirmations = { offered: 'ожидает принятия задания', confirm_pickup: 'ожидает подтверждения забора', confirm_delivery: 'ожидает подтверждения доставки' }
+  if (!online) return <p className="shift-note" role="status">Связь потеряна. Показано последнее состояние склада.</p>
+  const rows = robots.map(robot => {
+    const driverMessage = confirmations[robot.driver_phase as keyof typeof confirmations]
+    const message = robot.stopped_by_operator ? 'остановлен оператором' : driverMessage || (robot.status === 'waiting' ? 'ожидает свободного пути' : '')
+    if (!message) return null
+    return <li key={robot.id}><span><b>{robot.id}</b> {message}{robot.order_id && ' · ' + robot.order_id}</span>
+      {driverMessage && !robot.stopped_by_operator
+        ? <a href={`?view=driver&vehicle=${encodeURIComponent(robot.id)}&task=open`} target="_blank" rel="noreferrer">Открыть планшет ↗</a>
+        : <button onClick={() => onVehicle(robot.id)}>На карте</button>}
+    </li>
+  }).filter(Boolean)
+  if (!rows.length && !closures.length) return <p className="shift-note">{running ? 'Сейчас подтверждений и вмешательств не требуется.' : 'Смена на паузе. Для движения погрузчиков нажмите «Запустить».'}</p>
+  return <section className="shift-attention" aria-label="Требует внимания"><strong>Требует внимания</strong>
+    <ul>{closures.length > 0 && <li><span>Перекрытые проезды · {closures.map(p => metricPoint(p)).join(', ')}</span><button onClick={onClosures}>Управление проходами</button></li>}{rows}</ul>
+  </section>
+}
+
+function DriverTablet({ initialTaskOpen, robot, robots, order, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
+  initialTaskOpen: boolean; robot: Robot; robots: Robot[]; order?: Order; cells: React.ReactNode; physicalScale: PhysicalScale;
   running: boolean; busy: boolean; online: boolean; events: EventItem[];
   onSelect: (id: string) => void; onCommand: (path: string, body?: unknown) => Promise<void>;
 }) {
-  const [taskOpen, setTaskOpen] = useState(false)
+  const [taskOpen, setTaskOpen] = useState(initialTaskOpen)
   const [taskOffset, setTaskOffset] = useState({ x: 0, y: 0 })
   const taskDrag = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
   useEffect(() => {
@@ -558,7 +616,7 @@ function DriverTablet({ robot, robots, order, cells, physicalScale, running, bus
         <p className="driver-instruction">{robot.stopped_by_operator ? 'Движение остановлено. Продолжите работу, когда будете готовы.' : instructions[robot.driver_phase]}</p>
         {order && <><div className="task-product"><span className="stock-box">▧</span><div><small>Товар · {order.product_id} · {order.quantity} шт.</small><strong>{order.item}</strong><small>Размер коробки · {order.length_mm != null && order.width_mm != null && order.height_mm != null ? formatDimensions(order.length_mm, order.width_mm, order.height_mm) : 'не указан'}</small><small>Адрес отбора · {order.storage_location_id || 'назначается'}</small>{currentAllocation?.placement_snapshot.length ? <small>Координаты коробок · {currentAllocation.placement_snapshot.map(position => formatCoordinates(position.x_mm, position.y_mm)).join(' · ')}</small> : null}</div></div>
         <ol className="task-steps">{['Принять', 'К товару', 'Забрать', 'К отгрузке', 'Доставить'].map((label, index) => <li key={label} className={index === step ? 'current' : index < step ? 'done' : ''}><b>{index < step ? '✓' : index + 1}</b>{label}</li>)}</ol>
-        <div className="task-route"><div><span className="route-marker pickup-marker">A</span><small>Забор</small><strong>{order.pickup.join(' · ')}</strong></div><span className="route-arrow">→</span><div><span className="route-marker drop-marker">B</span><small>Доставка</small><strong>{order.dropoff.join(' · ')}</strong></div></div></>}
+        <div className="task-route"><div><span className="route-marker pickup-marker">A</span><small>Забор</small><strong>{metricPoint(order.pickup)}</strong></div><span className="route-arrow">→</span><div><span className="route-marker drop-marker">B</span><small>Доставка</small><strong>{metricPoint(order.dropoff)}</strong></div></div></>}
         <div className="tablet-actions">
           {action && order && <button className="tablet-primary" disabled={busy || robot.stopped_by_operator} onClick={() => onCommand(`/api/robots/${robot.id}/driver-action`, { order_id: order.id, action: action.command })}>{action.label}</button>}
           <button className="tablet-secondary" disabled={busy || (!order && robot.driver_phase !== 'returning')} onClick={() => onCommand(`/api/robots/${robot.id}/${robot.stopped_by_operator ? 'resume' : 'stop'}`)}>{robot.stopped_by_operator ? '▶ Продолжить' : 'Ⅱ Приостановить движение'}</button>
@@ -566,15 +624,15 @@ function DriverTablet({ robot, robots, order, cells, physicalScale, running, bus
         </div>
         <p className="tablet-hint">В этом режиме движение моделируется. Забор и доставка выполняются только после вашего подтверждения.</p>
       </section>
-      <section className="tablet-map panel"><div className="tablet-map-title"><div><h2>{destination ? `Цель: ${destination.join(' · ')}` : 'Карта склада'}</h2><small className="tablet-dimensions">Шаг сетки {physicalScale.cellStepM.toFixed(1)} м · габарит {physicalScale.forkliftLengthM.toFixed(1)} × {physicalScale.forkliftWidthM.toFixed(1)} м (демо)</small></div><span className="map-live">{online ? '● На связи' : '○ Нет связи'}</span></div>
+      <section className="tablet-map panel"><div className="tablet-map-title"><div><h2>{destination ? `Цель: ${metricPoint(destination)}` : 'Карта склада'}</h2><small className="tablet-dimensions">Габарит {physicalScale.forkliftLengthM.toFixed(1)} × {physicalScale.forkliftWidthM.toFixed(1)} м (демо)</small></div><span className="map-live">{online ? '● На связи' : '○ Нет связи'}</span></div>
       {robot.status === 'waiting' && ['to_pickup', 'to_dropoff', 'returning'].includes(robot.driver_phase) && <div className="workflow-notice">Свободного пути нет. Ожидайте открытия прохода диспетчером.</div>}
       {robot.route_version > 0 && <div className="route-update">Маршрут пересмотрен · версия {robot.route_version}</div>}
       <div className="map-legend"><span><i className="legend-dot robot-dot" /> Выбранный погрузчик</span><span><i className="legend-box route-dot" /> Ваш маршрут</span><span><i className="legend-box closed-dot" /> Перекрытый проход</span></div>
-      <div className="tablet-scene">{cells}</div><div className="tablet-position"><span><small>ВАША ПОЗИЦИЯ</small><strong>{robot.position.join(' · ')}</strong></span><span><small>КЛЕТОК ДО ЦЕЛИ</small><strong>{robot.route.length || (destination && key(destination) !== key(robot.position) ? '–' : '0')}</strong></span><span><small>ГРУЗ</small><strong>{robot.carrying_item ? 'На борту' : 'Пусто'}</strong></span></div>
+      <div className="tablet-scene">{cells}</div><div className="tablet-position"><span><small>ВАША ПОЗИЦИЯ</small><strong>{metricPoint(robot.position_m ?? robot.position, !!robot.position_m)}</strong></span><span><small>ДО ЦЕЛИ</small><strong>{(robot.route.length ? (robot.route_remaining_m ?? robot.route.length * NODE_SPACING_M).toLocaleString('ru') + ' м' : '') || (destination && key(destination) !== key(robot.position) ? '–' : '0 м')}</strong></span><span><small>ГРУЗ</small><strong>{robot.carrying_item ? 'На борту' : 'Пусто'}</strong></span></div>
       <div className="driver-events" aria-live="polite">{events.filter((event) => event.robot_id === robot.id).slice(0, 3).map((event) => <p key={event.id}>{event.message}</p>)}</div>
       </section>
     </div>
-    <footer className="tablet-footer"><span>Виртуальный склад · координаты в клетках</span><span>{online ? 'Подключено к симуляции' : 'Последнее известное состояние'}</span></footer>
+    <footer className="tablet-footer"><span>Виртуальный склад · координаты в метрах</span><span>{online ? 'Подключено к симуляции' : 'Последнее известное состояние'}</span></footer>
     </section>
   </>
 }

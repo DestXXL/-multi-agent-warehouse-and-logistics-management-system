@@ -4,6 +4,7 @@ from collections import deque
 from dataclasses import replace
 from datetime import UTC, datetime
 
+from backend.traffic import permits, road_network
 from backend.agents import ManagerAgent, RobotAgent, ZoneAgent
 from backend.dispatch import Proposal, coordination_step, destination, record
 from backend.models import Order, Point, Robot, StockItem, Warehouse, StorageLocation, StockAllocation, rack_pickup_faces
@@ -18,6 +19,8 @@ from backend.rack_types import (
 
 class WarehouseSimulation:
     TICK_SECONDS = 1.0
+    NODE_SPACING_M = 3.0
+    TRAVEL_SPEED_M_S = 1.5
 
     def __init__(self) -> None:
         self.manager_agent = ManagerAgent()
@@ -30,6 +33,7 @@ class WarehouseSimulation:
         self.reset()
 
     def reset(self) -> None:
+        self.model_routes = {}
         prior_inventory = self.warehouse.inventory if hasattr(self, "warehouse") else []
         obstacles = [(x, y) for x in range(4, 8) for y in (1, 2, 4, 5)]
         racks = demo_racks(obstacles)
@@ -87,12 +91,14 @@ class WarehouseSimulation:
         self.running = False
         self.zone_agent.clear()
         self.tick_count = 0
+        self.transit: dict[str, tuple[Point, float]] = {}
         self.motion_wait: dict[str, int] = {}
         self.coordination = None
         self.closure_review = False
         self.metrics = dict(distance=0, waiting=0, queue_wait=0, requests=0, tokens=0, fallbacks=0)
         self.decisions: deque[dict] = deque(maxlen=8)
         self.next_order_number = 4
+        self.stock_movements: deque[dict] = deque(maxlen=50)
         self.events: deque[dict] = deque(maxlen=100)
         self._event("Склад подготовлен. Ожидается запуск симуляции.", "system")
 
@@ -124,8 +130,19 @@ class WarehouseSimulation:
             stock.placement_y_mm = placements[0]["y_mm"]
             stock.rotated = placements[0]["rotated"]
 
+    def roads(self):
+        if getattr(self, "_road_layout", None) is not self.warehouse:
+            self._road_layout = self.warehouse
+            edges, stops = road_network(self.warehouse)
+            self._edges = edges if self.warehouse.lanes else None
+            self._stops = stops
+            self._road_map = {"edges": sorted((a, b) for a, b in edges if a < b), "stops": sorted(stops)}
+        return self._edges
+
     def state(self) -> dict:
         warehouse = self.warehouse.to_dict()
+        if self.roads() is not None:
+            warehouse["roads"] = self._road_map
         stocks_by_location: dict[str, list[StockItem]] = {}
         for item in self.warehouse.inventory:
             if item.location_id:
@@ -201,9 +218,14 @@ class WarehouseSimulation:
             order_data["height_mm"] = order.height_mm if order.height_mm is not None else (stock.height_mm if stock else None)
         for data, robot in zip(warehouse["robots"], self.warehouse.robots):
             order = self._get_order(robot.order_id) if robot.order_id else None
+            target, travelled = self.transit.get(robot.id, (robot.position, 0.0))
+            data["position_m"] = [(a + 0.5) * self.NODE_SPACING_M + (b - a) * travelled
+                                  for a, b in zip(robot.position, target)]
+            data["route_remaining_m"] = max(0, len(robot.route) * self.NODE_SPACING_M - travelled)
             data["pickup_location_id"] = order.storage_location_id if order and robot.driver_phase in ("to_pickup", "confirm_pickup") else None
             data["pickup_product_id"] = order.product_id if order and data["pickup_location_id"] else None
             data["can_report_obstacle"] = self._report_point(robot) is not None
+        warehouse["node_spacing_m"] = self.NODE_SPACING_M
         warehouse["closed_cells"] = [list(point) for point in sorted(self.zone_agent.blocked_cells)]
         return {
             "running": self.running,
@@ -212,6 +234,7 @@ class WarehouseSimulation:
             "warehouse": warehouse,
             "storage_summary": {"locations": len(warehouse["storage_locations"]), "occupied": occupied, "free": len(warehouse["storage_locations"]) - occupied},
             "events": list(self.events),
+            "stock_movements": list(reversed(self.stock_movements)),
             "dispatch": {
                 "mode": self.dispatch_mode, "model_available": self.model_available,
                 "metrics": self.shift_metrics(), "decisions": list(self.decisions),
@@ -276,6 +299,7 @@ class WarehouseSimulation:
                     rotated=placements[0]["rotated"], unit_placements=placements,
                 )
                 self.warehouse.inventory.append(stock)
+                self._stock_entry(stock, 0, "Приход", order_id)
                 created.append(stock)
             item_id = created[0].id
             pickup = created[0].position
@@ -308,6 +332,46 @@ class WarehouseSimulation:
         self.warehouse.orders.append(order)
         self._event(f"Создан заказ {order.id}: {item}.", "operator", order_id=order.id)
         return self.state()
+
+    def _stock_entry(self, stock, before, operation, note):
+        self.stock_movements.append(dict(time=datetime.now(UTC).isoformat(), sku=stock.product_id or stock.id,
+                                         address=self._location_address(stock.location_id), operation=operation,
+                                         before=before, after=stock.quantity, note=note))
+
+    def post_stock(self, item_id, operation, amount, expected, note):
+        stock = self._get_stock_item(item_id)
+        before = stock.quantity
+        if expected != before:
+            raise ValueError("Остаток изменился. Сверьте количество и повторите операцию.")
+        delta = amount - before if operation == "count" else amount if operation == "receipt" else -amount
+        if delta > 0:
+            location = next((loc for loc in self.warehouse.storage_locations if loc.id == stock.location_id and loc.enabled), None)
+            if location is None:
+                raise ValueError("Адрес хранения недоступен.")
+            occupied = self._occupied_rectangles(location.id)
+            for order in self.warehouse.orders:
+                if order.status not in ("completed", "cancelled"):
+                    for allocation in order.allocations:
+                        if allocation.picked and allocation.storage_location_id == location.id:
+                            occupied.extend(allocation.placement_snapshot)
+            placements = pack_packages((stock.length_mm, stock.width_mm, stock.height_mm), delta, location, occupied)
+            if len(placements) != delta:
+                raise ValueError("На этом адресе недостаточно места.")
+            stock.unit_placements.extend(placements)
+        elif delta < 0:
+            free = self._free_placements(stock)
+            if -delta > len(free):
+                raise ValueError("Списание превышает свободный остаток с учётом резервов.")
+            removed = free[delta:]
+            stock.unit_placements = [pos for pos in stock.unit_placements if pos not in removed]
+        stock.quantity += delta
+        if stock.unit_placements:
+            first = stock.unit_placements[0]
+            stock.placement_x_mm, stock.placement_y_mm, stock.rotated = first["x_mm"], first["y_mm"], first["rotated"]
+        self._sync_stock_status(stock)
+        label = {"receipt": "Приход", "expense": "Списание", "count": "Пересчёт"}[operation]
+        self._stock_entry(stock, before, label, note)
+        self._event(f"{label} · {stock.id}: {before} → {stock.quantity} шт.", "operator")
 
     def resize_product(self, item_id: str, dimensions: tuple[int, int, int]) -> dict:
         selected = next((item for item in self.warehouse.inventory if item.id == item_id), None)
@@ -359,6 +423,7 @@ class WarehouseSimulation:
                 stock.reserved_by = next(iter(stock.reservations), None)
             if allocation.picked:
                 stock.quantity += allocation.quantity
+                self._stock_entry(stock, stock.quantity - allocation.quantity, "Возврат", order.id)
                 stock.unit_placements.extend(allocation.placement_snapshot)
                 stock.unit_placements.sort(key=lambda rectangle: (rectangle["y_mm"], rectangle["x_mm"]))
                 allocation.picked = False
@@ -397,7 +462,7 @@ class WarehouseSimulation:
         handling = set(self.warehouse.shipping_points)
         handling.update(robot.home for robot in self.warehouse.robots)
         handling.update(point for order in self.warehouse.orders for point in (order.pickup, order.dropoff))
-        if point in occupied or point in handling:
+        if point in occupied or point in handling or any(point == end for end, _ in self.transit.values()):
             return None
         return point
 
@@ -420,7 +485,7 @@ class WarehouseSimulation:
             if point in resource.route or resource.id == robot.id:
                 self._refresh_route(resource)
                 resource.route_version += 1
-                result = f"обход: {len(resource.route)} клеток" if resource.route else "ожидание свободного пути"
+                result = f"обход: {len(resource.route) * self.NODE_SPACING_M:g} м" if resource.route else "ожидание свободного пути"
                 self._event(f"{resource.id}: {result}.", "manager", robot_id=resource.id)
         return self.state()
 
@@ -435,9 +500,20 @@ class WarehouseSimulation:
         return self.state()
 
     def _refresh_route(self, robot: Robot) -> None:
+        if self.dispatch_mode == "model":
+            if robot.driver_phase in ("offered", "to_pickup") and robot.order_id:
+                self._pickup_route(robot, self._get_order(robot.order_id), set())
+            robot.route = self.approved_route(robot) or []
+            return
+        if robot.id in self.transit:
+            end, _ = self.transit[robot.id]
+            goal = destination(self, robot)
+            others = {r.position for r in self.warehouse.robots if r.id != robot.id}
+            robot.route = [end] + ((self._plan_route(end, goal, others) or []) if goal else [])
+            return
         if robot.driver_phase == "returning":
             occupied = {other.position for other in self.warehouse.robots if other.id != robot.id}
-            robot.route = self._plan_route(robot.position, robot.home, occupied) or []
+            robot.route = self._plan_route(robot.position, robot.home, occupied, heading=robot.heading) or []
             robot.status = "stopped" if robot.stopped_by_operator else "moving" if robot.route else "waiting"
             return
         if not robot.order_id:
@@ -449,7 +525,7 @@ class WarehouseSimulation:
         if robot.driver_phase in ("offered", "to_pickup", "confirm_pickup"):
             robot.route = self._pickup_route(robot, order, occupied) or []
         else:
-            robot.route = self._plan_route(robot.position, order.dropoff, occupied) or []
+            robot.route = self._plan_route(robot.position, order.dropoff, occupied, heading=robot.heading) or []
         if robot.stopped_by_operator:
             robot.status = "stopped"
         elif robot.driver_phase in ("offered", "confirm_pickup", "confirm_delivery"):
@@ -480,6 +556,7 @@ class WarehouseSimulation:
                 raise ValueError("Физические места груза не соответствуют резерву")
             before = stock.quantity
             stock.quantity -= allocation.quantity
+            self._stock_entry(stock, before, "Отбор", order.id)
             stock.reservations.pop(order.id, None)
             stock.reserved_placements.pop(order.id, None)
             allocation.placement_snapshot = list(reserved_placements[:allocation.quantity])
@@ -560,7 +637,7 @@ class WarehouseSimulation:
             protected.update(resource.home for resource in self.warehouse.robots)
             protected.update(cell for order in self.warehouse.orders for cell in (order.pickup, order.dropoff))
             for point in existing_route[1:-1]:
-                if point in protected:
+                if point in protected or any(point == end for end, _ in self.transit.values()):
                     continue
                 alternative = self._plan_route(robot.position, goal, occupied, {point})
                 if alternative and len(alternative) > len(existing_route):
@@ -569,6 +646,18 @@ class WarehouseSimulation:
             if selected:
                 break
         return selected
+
+    def route_key(self, robot):
+        phase = "to_pickup" if robot.driver_phase == "offered" else robot.driver_phase
+        goal = self._get_order(robot.order_id).pickup if robot.driver_phase == "offered" else destination(self, robot)
+        return robot.order_id, phase, goal
+
+    def approved_route(self, robot):
+        saved = self.model_routes.get(robot.id)
+        if saved and saved[0] == self.route_key(robot) and robot.position in saved[1]:
+            path = saved[1]
+            return path[path.index(robot.position) + 1:]
+        return None
 
     def tick(self, *, assign_orders: bool = True) -> dict:
         if not self.running:
@@ -587,26 +676,36 @@ class WarehouseSimulation:
             goal = destination(self, robot)
             if robot.stopped_by_operator or goal is None:
                 continue
-            if exclusive and step and robot.id != step[0]:
+            if exclusive and step and robot.id != step[0] and robot.id not in self.transit:
                 robot.status = "waiting"
                 self.metrics["waiting"] += 1
                 continue
-            others = occupied - {robot.position}
+            others = (occupied - {robot.position}) | {end for rid, (end, _) in self.transit.items() if rid != robot.id}
             order = self._get_order(robot.order_id) if robot.order_id else None
-            if step and step[0] == robot.id:
+            if robot.id in self.transit:
+                end, _ = self.transit[robot.id]
+                route = robot.route if robot.route and robot.route[0] == end else [end]
+            elif step and step[0] == robot.id:
                 route = step[1]
+            elif self.dispatch_mode == "model":
+                route = self.approved_route(robot)
+                if route and (route[0] in others or self.zone_agent.blocked_cells.intersection(route)):
+                    self.model_routes.pop(robot.id, None)
+                    route = None
             elif robot.driver_phase == "to_pickup":
                 route = self._pickup_route(robot, order, others)
             else:
-                route = self._plan_route(robot.position, goal, others)
+                route = self._plan_route(robot.position, goal, others, heading=robot.heading)
             moved = self._advance(robot, route, others)
             occupied.add(robot.position)
-            if moved and step and step[0] == robot.id:
+            if moved and step and step[0] == robot.id and step[1] and step[1][0] == robot.position:
                 key, target, cells, locked = self.coordination[0]
                 if len(cells) > 1:
                     self.coordination[0] = (key, target, cells[1:], locked)
                 else:
                     self.coordination.pop(0)
+            if robot.id in self.transit:
+                continue
             if robot.driver_phase == "returning":
                 if robot.position == robot.home:
                     robot.driver_phase = "idle"
@@ -662,6 +761,7 @@ class WarehouseSimulation:
     def shift_metrics(self) -> dict:
         return {
             **self.metrics,
+            "distance_m": self.metrics["distance"] * self.NODE_SPACING_M + sum(progress for _, progress in self.transit.values()),
             "ticks": self.tick_count,
             "completed": sum(order.status == "completed" for order in self.warehouse.orders),
         }
@@ -736,7 +836,7 @@ class WarehouseSimulation:
         blocked = set(self.warehouse.obstacles) | {r.position for r in self.warehouse.racks} | self.zone_agent.blocked_cells
         return [point for point in rack_pickup_faces(rack.position)
                 if 0 <= point[0] < self.warehouse.width and 0 <= point[1] < self.warehouse.height
-                and point not in blocked]
+                and point not in blocked and (self.roads() is None or point in self._stops)]
 
     @staticmethod
     def _heading(start: Point, end: Point) -> int:
@@ -750,7 +850,7 @@ class WarehouseSimulation:
         for point in self._access_points(rack):
             if point in occupied:
                 continue
-            route = self._plan_route(robot.position, point, occupied)
+            route = self._plan_route(robot.position, point, occupied, heading=robot.heading)
             if route is None:
                 continue
             heading, turns, current = robot.heading, 0, robot.position
@@ -759,7 +859,7 @@ class WarehouseSimulation:
                 delta = (desired - heading) % 360
                 turns += min(delta, 360 - delta) // 90
                 heading, current = desired, cell
-            candidates.append((len(route) + turns, point != order.pickup, point, route))
+            candidates.append((2 * len(route) + turns, point != order.pickup, point, route))
         if not candidates:
             return None
         _, _, order.pickup, route = min(candidates)
@@ -782,11 +882,19 @@ class WarehouseSimulation:
         if route:
             cell = route[0]
             blocked = set(self.warehouse.obstacles) | {r.position for r in self.warehouse.racks} | self.zone_agent.blocked_cells | occupied
-            if cell not in blocked and sum(abs(a-b) for a, b in zip(robot.position, cell)) == 1:
+            if cell not in blocked and (self.roads() is None or (robot.position, cell) in self.roads()) and permits(self.warehouse.lanes, robot.position, cell) and sum(abs(a-b) for a, b in zip(robot.position, cell)) == 1:
                 desired = self._heading(robot.position, cell)
                 if robot.heading != desired:
                     self._turn(robot, desired)
                     return False
+                _, travelled = self.transit.get(robot.id, (cell, 0.0))
+                travelled += self.TRAVEL_SPEED_M_S * self.TICK_SECONDS
+                if travelled < self.NODE_SPACING_M:
+                    self.transit[robot.id] = cell, travelled
+                    robot.motion = robot.status = "moving"
+                    self.motion_wait[robot.id] = 0
+                    return False
+                self.transit.pop(robot.id, None)
                 robot.position = cell
                 robot.route = route[1:]
                 robot.motion = "moving"
@@ -815,14 +923,19 @@ class WarehouseSimulation:
         goal: Point,
         occupied: set[Point],
         extra_blocked: set[Point] | None = None,
+        heading: int | None = None,
     ) -> list[Point] | None:
-        return self.robot_agent.plan_route(
+        planner = self.robot_agent.plan_route if heading is None else self.robot_agent.driving_route
+        return planner(
+            **({} if heading is None else {"heading": heading}),
             start=start,
             goal=goal,
             width=self.warehouse.width,
             height=self.warehouse.height,
             blocked=set(self.warehouse.obstacles) | {rack.position for rack in self.warehouse.racks} | self.zone_agent.blocked_cells | (extra_blocked or set()),
             occupied=occupied,
+            lanes=self.warehouse.lanes,
+            roads=self.roads(),
         )
 
     def _get_robot(self, robot_id: str) -> Robot:

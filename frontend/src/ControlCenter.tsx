@@ -1,3 +1,4 @@
+import { metricPoint, NODE_SPACING_M } from './units'
 import { useEffect, useRef, useState, type PointerEventHandler } from 'react'
 import type { Rack, Robot, Order } from './App'
 import { formatDimensions, formatSquareMillimeters, occupancyPercent } from './units'
@@ -49,12 +50,12 @@ export function ObjectInspector({ rack, robot, order, phase, status, isOpen, onC
       <button className="primary-button" onClick={onRackDetails}>Содержимое по ярусам ↗</button>
     </> : robot ? <>
       <div className={`inspector-status ${robot.status}`}>{phase}</div>
-      <dl className="inspector-specs"><dt>Позиция</dt><dd>{robot.position.join(' · ')}</dd><dt>Задание</dt><dd>{robot.order_id ?? 'Нет задания'}</dd><dt>Осталось клеток</dt><dd>{robot.route.length}</dd><dt>Версия маршрута</dt><dd>{robot.route_version}</dd><dt>Груз</dt><dd>{robot.carrying_item ? 'На борту' : 'Пусто'}</dd></dl>
-      {robot.route.length > 0 && <p className="inspector-note">Маршрут выделен на карте. Цель: {robot.route[robot.route.length - 1].join(' · ')}.</p>}
+      <dl className="inspector-specs"><dt>Позиция</dt><dd>{metricPoint(robot.position_m ?? robot.position, !!robot.position_m)}</dd><dt>Задание</dt><dd>{robot.order_id ?? 'Нет задания'}</dd><dt>Осталось пройти</dt><dd>{robot.route_remaining_m ?? robot.route.length * NODE_SPACING_M} м</dd><dt>Версия маршрута</dt><dd>{robot.route_version}</dd><dt>Груз</dt><dd>{robot.carrying_item ? 'На борту' : 'Пусто'}</dd></dl>
+      {robot.route.length > 0 && <p className="inspector-note">Маршрут выделен на карте. Цель: {metricPoint(robot.route[robot.route.length - 1])}.</p>}
       <a className="primary-button" href={`?view=driver&vehicle=${encodeURIComponent(robot.id)}`}>Открыть планшет водителя ↗</a>
     </> : order ? <>
       <span className={`order-status ${order.status}`}>{status}</span><h3>{order.item}</h3>
-      <dl className="inspector-specs"><dt>Количество</dt><dd>{order.quantity} шт.</dd><dt>Погрузчик</dt><dd>{order.robot_id ?? 'Не назначен'}</dd><dt>Приоритет</dt><dd>{order.priority}</dd><dt>Забор (клетка)</dt><dd>{order.pickup.join(' · ')}</dd><dt>Отгрузка (клетка)</dt><dd>{order.dropoff.join(' · ')}</dd><dt>Габариты коробки</dt><dd>{order.length_mm && order.width_mm && order.height_mm ? formatDimensions(order.length_mm, order.width_mm, order.height_mm) : 'Не указаны'}</dd></dl>
+      <dl className="inspector-specs"><dt>Количество</dt><dd>{order.quantity} шт.</dd><dt>Погрузчик</dt><dd>{order.robot_id ?? 'Не назначен'}</dd><dt>Приоритет</dt><dd>{order.priority}</dd><dt>Забор</dt><dd>{metricPoint(order.pickup)}</dd><dt>Отгрузка</dt><dd>{metricPoint(order.dropoff)}</dd><dt>Габариты коробки</dt><dd>{order.length_mm && order.width_mm && order.height_mm ? formatDimensions(order.length_mm, order.width_mm, order.height_mm) : 'Не указаны'}</dd></dl>
       <p className="inspector-note">{order.allocations.length ? order.allocations.map(a => `${a.storage_location_id}: ${a.quantity} шт. · ${a.picked ? 'забрано' : 'к отбору'}`).join('\n') : 'Адреса отбора появятся после назначения.'}</p>
     </> : <div className="inspector-empty"><NavIcon kind="map" /><p>Выберите стеллаж или погрузчик на карте, чтобы увидеть характеристики и доступные действия.</p><span>Состояние поступает из симуляции</span></div>}
   </section>

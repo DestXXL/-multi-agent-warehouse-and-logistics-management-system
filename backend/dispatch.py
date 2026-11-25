@@ -210,6 +210,7 @@ def zone_options(sim) -> Proposal:
                 choices[key] = [(yielding.id, yield_goal, retreat, True), (passing.id, target, passage, True)]
                 facts[key] = {
                     "yields": yielding.id, "wait_cell": side, "passes": passing.id,
+                    "retreat": retreat, "passage": passage,
                     "retreat_cells": len(retreat), "passage_cells": len(passage),
                     "passing_with_cargo": passing.carrying_item, "yielding_with_cargo": yielding.carrying_item,
                 }
@@ -234,7 +235,7 @@ def zone_options(sim) -> Proposal:
                 choices[key] = [(robot.id, target, route, False)]
                 facts[key] = {
                     "passes": robot.id, "passage_cells": len(route), "position": robot.position,
-                    "route_start": route[:4], "closed_cells": sorted(sim.zone_agent.blocked_cells),
+                    "path": route, "route_start": route[:4], "closed_cells": sorted(sim.zone_agent.blocked_cells),
                     "passing_with_cargo": robot.carrying_item,
                 }
             if len(choices) >= 6:
@@ -304,6 +305,25 @@ def record(sim, proposal: Proposal, choice: list[str], source: str, reason: str,
 def operator_facts(sim, target: str | None, closure: Point | None) -> list[str]:
     warehouse = sim.warehouse
     facts = [f"Склад: {'работает' if sim.running else 'на паузе'}, такт {sim.tick_count}, режим {sim.dispatch_mode}."]
+    if target == "inventory":
+        balances = {}
+        demand = {}
+        for item in warehouse.inventory:
+            sku = item.product_id or item.id
+            physical, reserved = balances.get(sku, (0, 0))
+            balances[sku] = physical + item.quantity, reserved + sum(item.reservations.values())
+        for order in warehouse.orders:
+            if order.status == "pending":
+                sku = order.product_id or order.item_id
+                demand[sku] = demand.get(sku, 0) + order.quantity
+        ranked = []
+        for sku in balances.keys() | demand.keys():
+            physical, reserved = balances.get(sku, (0, 0))
+            available = physical - reserved
+            wanted = demand.get(sku, 0)
+            missing = max(0, wanted - available)
+            ranked.append((-missing, sku, f"{sku}: на полках {physical}, резерв {reserved}, свободно {available}, ожидающие заказы {wanted}, дефицит {missing} шт."))
+        return [row[2] for row in sorted(ranked)] or ["Склад пуст."]
     for order in warehouse.orders:
         if order.status in ("pending", "cancelled") or target and order.id != target:
             continue
