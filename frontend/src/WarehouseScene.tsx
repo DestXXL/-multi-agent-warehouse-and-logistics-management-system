@@ -1,11 +1,13 @@
-import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { serviceAisles } from './service-aisles'
+import TrafficMarkings, { type Lane } from './TrafficMarkings'
+import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { Rack, Robot, StorageLocation } from './App'
 import { findAisleLabels } from './scene-geometry'
 import { formatDimensions, formatPercent, occupancyPercent } from './units'
 
 type Point = [number, number]
 type Props = {
-  warehouse: { width: number; height: number; racks: Rack[]; robots: Robot[]; storage_locations: StorageLocation[]; obstacles: Point[]; closed_cells: Point[]; pickup_points: Point[]; shipping_points: Point[] }
+  warehouse: { roads?: { edges: [Point, Point][]; stops: Point[] }; lanes?: Lane[]; width: number; height: number; racks: Rack[]; robots: Robot[]; storage_locations: StorageLocation[]; obstacles: Point[]; closed_cells: Point[]; pickup_points: Point[]; shipping_points: Point[] }
   scale: { cellStepM: number; forkliftLengthM: number; forkliftWidthM: number }
   selectedRack: string | null; selectedRobot: string | null; target?: Point | null
   onRack: (id: string) => void; onRobot: (id: string) => void
@@ -18,6 +20,9 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [hovered, setHovered] = useState<string | null>(null)
   const [level, setLevel] = useState(1)
+  const [showLanes, setShowLanes] = useState(true)
+  const [showAccess, setShowAccess] = useState(true)
+  const access = useMemo(() => w.roads ? { stops: w.roads.stops, path: w.roads.edges.map(([[x,y],[u,v]]) => `M${x+.5} ${y+.5}L${u+.5} ${v+.5}`).join(" ") } : serviceAisles(w), [w])
   const [showDimensions, setShowDimensions] = useState(false)
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number } | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -77,6 +82,8 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
     <div className="scene-toolbar">
       <span className="scene-view-label">Вид сверху <span>· единый масштаб</span></span>
       <label>Ярус <select value={visibleLevel} onChange={e => setLevel(Number(e.target.value))}>{Array.from({ length: maxLevel }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}</select></label>
+      <button type="button" className="scene-dimensions-toggle" aria-pressed={showAccess} onClick={() => setShowAccess(!showAccess)}>Подъезды к полкам</button>
+      {!!w.lanes?.length && <button type="button" className="scene-dimensions-toggle" aria-pressed={showLanes} onClick={() => setShowLanes(!showLanes)}>Разметка</button>}
       <button type="button" className="scene-dimensions-toggle" aria-pressed={showDimensions} onClick={() => setShowDimensions(value => !value)}>Проезды</button>
       <div className="scene-camera" role="group" aria-label="Масштаб карты">
         <button type="button" aria-label="Уменьшить карту" disabled={zoom <= 1} onClick={() => zoomBy(-0.25)}>−</button>
@@ -104,15 +111,19 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
         onPointerMove={event => { const matrix = svg.current?.getScreenCTM(); if (drag.current && matrix) setPan({ x: drag.current.px + event.clientX / matrix.a - drag.current.x, y: drag.current.py + event.clientY / matrix.d - drag.current.y }) }}
         onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}>
         <defs>
-          <pattern id={`${id}-grid`} width={unit} height={unit} patternUnits="userSpaceOnUse"><path d={`M ${unit} 0 H 0 V ${unit}`} fill="none" stroke="var(--map-grid)" strokeWidth="1" /></pattern>
           <pattern id={`${id}-closed`} width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="12" fill="#e66d75" fillOpacity=".22" /></pattern>
           <marker id={`${id}-arrow`} viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--route)" /></marker>
         </defs>
         <g transform={`translate(${32 + pan.x} ${32 + pan.y}) scale(${zoom})`}>
           <rect width={w.width * unit} height={w.height * unit} rx="3" fill="var(--map-floor)" stroke="var(--map-border)" />
-          <rect width={w.width * unit} height={w.height * unit} fill={`url(#${id}-grid)`} />
-          {Array.from({ length: w.width }, (_, x) => <text key={x} className="scene-axis" x={x * unit + 32} y="-12" textAnchor="middle">{x}</text>)}
-          {Array.from({ length: w.height }, (_, y) => <text key={y} className="scene-axis" x="-14" y={y * unit + 36} textAnchor="middle">{y}</text>)}
+          {Array.from({ length: Math.ceil(w.width * scale.cellStepM / 5) }, (_, i) => <text key={i} className="scene-axis" x={i * 5 * unit / scale.cellStepM} y="-12" textAnchor="middle">{i * 5} м</text>)}
+          {Array.from({ length: Math.ceil(w.height * scale.cellStepM / 5) }, (_, i) => <text key={i} className="scene-axis" x="-14" y={i * 5 * unit / scale.cellStepM + 4} textAnchor="middle">{i * 5}</text>)}
+          {showAccess && <g transform={`scale(${unit})`} pointerEvents="none" aria-label="Двусторонние подъезды к полкам">
+            <path d={access.path} fill="none" stroke="var(--muted)" strokeWidth=".44" strokeOpacity=".13" strokeLinecap="round" />
+            <path d={access.path} fill="none" stroke="var(--muted)" strokeWidth=".045" strokeDasharray=".17 .12" />
+            {access.stops.map(([x,y]) => <circle key={x+','+y} cx={x+.5} cy={y+.5} r=".085" fill="var(--surface)" stroke="var(--muted)" strokeWidth=".045" />)}
+          </g>}
+          {showLanes && w.lanes && <TrafficMarkings lanes={w.lanes} unit={unit} />}
           {w.obstacles.filter(p => !w.racks.some(r => r.position[0] === p[0] && r.position[1] === p[1])).map(p => <rect key={`wall-${p}`} x={p[0] * unit + 3} y={p[1] * unit + 3} width="58" height="58" fill="var(--map-wall)" />)}
           {w.shipping_points.map(p => <g key={`shipping-${p}`} className="scene-zone shipping"><rect x={p[0] * unit + 4} y={p[1] * unit + 4} width="56" height="56" rx="4" /><text x={p[0] * unit + 32} y={p[1] * unit + 36} textAnchor="middle">Вывоз</text></g>)}
           {target && <g className="scene-target"><rect x={target[0] * unit + 5} y={target[1] * unit + 5} width="54" height="54" rx="4" /><text x={target[0] * unit + 32} y={target[1] * unit + 16} textAnchor="middle">Цель</text></g>}
@@ -135,25 +146,53 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
             return <g key={`aisle-${point}`} className={`scene-aisle ${aisle.fitsForklift ? '' : 'too-narrow'}`}><rect x={x * unit + 8} y={y * unit + 22} width="48" height="20" rx="3" /><text x={x * unit + 32} y={y * unit + 36} textAnchor="middle">{aisle.widthM.toLocaleString('ru', { maximumFractionDigits: 1 })} м</text><title>{`Расчётный проезд: ${aisle.widthM.toFixed(1)} м. ${aisle.fitsForklift ? 'Шире корпуса погрузчика' : 'Уже корпуса погрузчика'}. Демо-масштаб, не проверка проходимости.`}</title></g>
           })}
           {w.closed_cells.map(p => <g key={`closed-${p}`}><rect x={p[0] * unit + 2} y={p[1] * unit + 2} width="60" height="60" fill={`url(#${id}-closed)`} stroke="#e66d75" /><text x={p[0] * unit + 32} y={p[1] * unit + 39} textAnchor="middle" fill="#e66d75" fontSize="24">!</text></g>)}
-          {w.robots.map(robot => <Forklift key={robot.id} robot={robot} unit={unit} rw={scale.forkliftWidthM * 1000 * ratio} rh={scale.forkliftLengthM * 1000 * ratio} selected={robot.id === selectedRobot} onSelect={() => onRobot(robot.id)} />)}
+          {w.robots.map(robot => <Forklift key={robot.id} robot={robot} unit={unit} spacing={scale.cellStepM} rw={scale.forkliftWidthM * 1000 * ratio} rh={scale.forkliftLengthM * 1000 * ratio} selected={robot.id === selectedRobot} onSelect={() => onRobot(robot.id)} />)}
         </g>
       </svg>
       <button type="button" className="scene-resize-handle" aria-label="Изменить размер карты" title="Потяните, чтобы изменить размер карты" onPointerDown={beginViewportResize} onPointerMove={moveViewportResize} onPointerUp={endViewportResize} onPointerCancel={endViewportResize}><span aria-hidden="true">◢</span></button>
       {tip && <div className="scene-tooltip" role="status"><strong>{tip.id} <span>{tip.rack_type_title}</span></strong><p>{formatDimensions(tip.width_mm, tip.depth_mm, tip.height_mm)} · {tip.levels} ярусов</p><p>{formatPercent(occupancyPercent(tip.occupied_locations, tip.location_count))}% мест занято · {tip.free_locations} свободных мест · Подъезд со стороны полок: сверху или снизу</p></div>}
     </div>
-    <div className="scene-caption"><span>Перетащите карту · + / − для масштаба</span><span>Грузы: ярус {visibleLevel} · 1 клетка ≈ {scale.cellStepM.toLocaleString('ru')} м</span></div>
+    <div className="scene-caption"><span>{showLanes && w.lanes?.length ? 'Стрелка — направление потока · сплошная — граница встречных полос' : 'Перетащите карту · + / − для масштаба'}</span><span>{showAccess && 'Пунктир — подъезд · кружок — место отбора · '}Грузы: ярус {visibleLevel} · координаты от верхнего левого угла, м</span></div>
   </div>
 }
 
 
-function Forklift({ robot, unit, rw, rh, selected, onSelect }: { robot: Robot; unit: number; rw: number; rh: number; selected: boolean; onSelect: () => void }) {
-  const [rotation, setRotation] = useState(robot.heading + 90)
-  useEffect(() => {
-    setRotation(current => current + ((robot.heading + 90 - current) % 360 + 540) % 360 - 180)
-  }, [robot.heading])
-  return <g role="button" tabIndex={0} aria-label={`Погрузчик ${robot.id}, выбрать`} aria-pressed={selected} data-robot={robot.id} data-heading={robot.heading} data-motion={robot.motion} className={`scene-robot ${robot.status} ${selected ? 'selected' : ''} ${robot.driver_phase === 'confirm_pickup' ? 'picking' : ''}`} transform={`translate(${robot.position[0] * unit + 32} ${robot.position[1] * unit + 32})`} onClick={onSelect} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect() } }}>
+function Forklift({ robot, unit, spacing, rw, rh, selected, onSelect }: { robot: Robot; unit: number; spacing: number; rw: number; rh: number; selected: boolean; onSelect: () => void }) {
+  const body = useRef<SVGGElement>(null)
+  const orientation = useRef<SVGGElement>(null)
+  const x = (robot.position_m ? robot.position_m[0] / spacing : robot.position[0] + 0.5) * unit
+  const y = (robot.position_m ? robot.position_m[1] / spacing : robot.position[1] + 0.5) * unit
+  const angle = robot.heading + 90
+  const pose = useRef({ x, y, angle })
+  useLayoutEffect(() => {
+    const start = pose.current
+    const turn = ((angle - start.angle) % 360 + 540) % 360 - 180
+    const paint = (fraction: number) => {
+      const current = { x: start.x + (x - start.x) * fraction, y: start.y + (y - start.y) * fraction, angle: start.angle + turn * fraction }
+      pose.current = current
+      body.current?.setAttribute('transform', `translate(${current.x} ${current.y})`)
+      orientation.current?.setAttribute('transform', `rotate(${current.angle})`)
+    }
+    const distance = Math.hypot(x - start.x, y - start.y)
+    if ((!distance && !turn) || distance > unit * 1.1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      paint(1)
+      return
+    }
+    // Keep animation local to this SVG group; the warehouse can contain thousands of storage locations.
+    const duration = Math.max(turn ? 950 : 0, Math.min(1050, distance / unit * (robot.position_m ? spacing / 1.5 : 1) * 1000))
+    const began = performance.now()
+    let frame: number
+    function draw(now: number) {
+      const progress = Math.min(1, Math.max(0, (now - began) / duration))
+      paint(progress)
+      if (progress < 1) frame = requestAnimationFrame(draw)
+    }
+    frame = requestAnimationFrame(draw)
+    return () => cancelAnimationFrame(frame)
+  }, [x, y, angle, unit, spacing, !!robot.position_m])
+  return <g role="button" tabIndex={0} aria-label={`Погрузчик ${robot.id}, выбрать`} aria-pressed={selected} data-robot={robot.id} data-heading={robot.heading} data-motion={robot.motion} className={`scene-robot ${robot.status} ${selected ? 'selected' : ''} ${robot.driver_phase === 'confirm_pickup' ? 'picking' : ''}`} ref={body} onClick={onSelect} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect() } }}>
     <circle className="robot-hit-area" r={Math.max(22, rh / 2 + 5)} />
-    <g className="robot-orientation" style={{ transform: `rotate(${rotation}deg)` }}>
+    <g className="robot-orientation" ref={orientation}>
       <rect className="robot-body" x={-rw / 2} y={-rh * .12} width={rw} height={rh * .62} rx="3" />
       <rect className="robot-cabin" x={-rw * .32} y={rh * .08} width={rw * .64} height={rh * .25} rx="2" />
       <g className="robot-loader"><path className="robot-forks" d={`M ${-rw * .48} ${-rh * .12} H ${rw * .48} M ${-rw * .32} ${-rh * .12} V ${-rh * .5} M ${rw * .32} ${-rh * .12} V ${-rh * .5}`} />

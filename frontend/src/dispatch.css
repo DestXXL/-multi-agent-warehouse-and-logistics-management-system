@@ -60,3 +60,19 @@
 .dispatch-panel form input, .dispatch-panel form select { box-sizing: border-box; width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 5px; font: inherit; color: inherit; background: var(--surface); }
 .dispatch-panel input[type=checkbox] { width: auto; }
 @media (max-width: 520px) { .ai-fields, .ai-agent-list { grid-template-columns: 1fr; } }
+
+.stock-tools { display: flex; flex-wrap: wrap; gap: .5rem; padding: .75rem 1rem; }
+.stock-tools p { width: 100%; margin: 0 0 .25rem; }
+.stock-tools input, .stock-tools select, .stock-tools button { font: inherit; color: inherit; background: inherit; border: 1px solid currentColor; border-radius: .35rem; padding: .35rem .5rem; }
+.stock-tools input { flex: 1 1 14rem; min-width: 0; }
+
+.shift-note, .shift-attention { margin: .5rem 0; padding: .65rem .9rem; color: var(--text); border-inline-start: 3px solid var(--accent); background: var(--surface); }
+.shift-attention ul { padding: 0; margin: .35rem 0 0; list-style: none; max-height: 12rem; overflow-y: auto; }
+.shift-attention li { display: flex; align-items: center; justify-content: space-between; gap: .35rem .9rem; flex-wrap: wrap; padding: .3rem 0; }
+.shift-attention button, .shift-attention a { font: inherit; color: inherit; background: var(--surface-raised); border: 1px solid var(--line); border-radius: .4rem; padding: .4rem .65rem; cursor: pointer; }
+
+.inventory-book {padding:.4rem 1rem; display:grid; gap:.55rem;}
+.inventory-book summary {cursor:pointer; padding:.35rem 0;}
+.inventory-book form, .inventory-book label {display:grid; gap:.35rem;}
+.inventory-book input,.inventory-book select,.inventory-book button {font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:.4rem; padding:.45rem; min-width:0;}
+.inventory-book details[open],.inventory-book section {max-height:18rem; overflow:auto;}

@@ -95,6 +95,8 @@ class ForkliftTests(unittest.TestCase):
         sim.start()
         for x in (1, 2, 3):
             self.tick(sim)
+            self.assertEqual(sim.state()["warehouse"]["robots"][0]["position_m"], [x * 3.0, 1.5])
+            self.tick(sim)
             self.assertEqual(robot.position, (x, 0))
             self.assertEqual(robot.motion, 'moving')
             self.assertEqual(robot.heading, 0)
@@ -224,6 +226,8 @@ class ForkliftTests(unittest.TestCase):
         self.assertEqual(coordination_step(sim), (robot.id, [(1, 1)]))
         self.tick(sim)
         self.assertEqual(robot.position, (0, 1))
+        self.tick(sim)
+        self.assertEqual(sim.state()["warehouse"]["robots"][0]["position_m"], [3.0, 4.5])
         self.tick(sim)
         self.assertEqual(robot.position, (1, 1))
 

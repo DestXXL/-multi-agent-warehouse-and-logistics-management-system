@@ -171,6 +171,7 @@ class Warehouse:
     storage_locations: list[StorageLocation] = field(default_factory=list)
     orders: list[Order] = field(default_factory=list)
     inventory: list[StockItem] = field(default_factory=list)
+    lanes: dict[Point, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Warehouse":
@@ -303,6 +304,7 @@ class Warehouse:
             storage_locations=locations,
             orders=orders,
             inventory=inventory,
+            lanes={(r["x"], r["y"]): r["direction"] for r in data.get("lanes", [])},
         )
 
     def to_dict(self) -> dict:
@@ -311,6 +313,7 @@ class Warehouse:
             "height": self.height,
             "obstacles": [list(point) for point in self.obstacles],
             "pickup_points": [list(point) for point in self.pickup_points],
+            "lanes": [dict(x=x, y=y, direction=d) for (x, y), d in self.lanes.items()],
             "shipping_points": [list(point) for point in self.shipping_points],
             "robots": [robot.to_dict() for robot in self.robots],
             "racks": [rack.to_dict() for rack in self.racks],

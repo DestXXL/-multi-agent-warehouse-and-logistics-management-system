@@ -37,3 +37,10 @@ export function occupancyPercent(occupied: number, total: number): number {
 export function formatPercent(value: number): string {
   return russianNumber.format(Number(value.toFixed(1)))
 }
+
+export const NODE_SPACING_M = 3
+
+export function metricPoint(point: [number, number], alreadyMeters = false): string {
+  const coords = point.map(v => russianNumber.format(alreadyMeters ? v : (v + 0.5) * NODE_SPACING_M))
+  return coords.join(' · ') + ' м'
+}

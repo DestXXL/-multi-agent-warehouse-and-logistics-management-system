@@ -184,7 +184,30 @@ async def change_mode(request: DispatchModeRequest) -> dict:
         harness.version += 1
         harness.seen.clear()
         simulation.dispatch_mode = request.mode
+        simulation.model_routes.clear()
+        simulation.coordination = None
+        for robot in simulation.warehouse.robots:
+            simulation._refresh_route(robot)
         simulation._event("Режим планирования: " + {"model": "модель.", "rules": "правила.", "demo": "демонстрация без LLM."}[request.mode], "operator")
+    return await publish_state()
+
+
+class StockPosting(BaseModel):
+    item_id: str
+    operation: Literal["receipt", "expense", "count"]
+    amount: int = Field(ge=0, le=10000, strict=True)
+    expected: int = Field(ge=0, strict=True)
+    note: str = Field(min_length=1, max_length=160)
+
+
+@app.post("/api/inventory/post")
+async def post_stock(body: StockPosting):
+    if not body.note.strip() or (body.amount == 0 and body.operation != "count"):
+        raise HTTPException(422, "Укажите основание и количество.")
+    try:
+        simulation.post_stock(body.item_id, body.operation, body.amount, body.expected, body.note.strip())
+    except (ValueError, KeyError) as error:
+        raise HTTPException(409, str(error)) from error
     return await publish_state()
 
 

@@ -1,3 +1,4 @@
+import { NODE_SPACING_M } from './units'
 import { useState, type FormEvent } from 'react'
 import './dispatch.css'
 import AIControl, { type AIState } from './AIControl'
@@ -5,6 +6,7 @@ import AIControl, { type AIState } from './AIControl'
 type Metrics = {
   completed: number
   ticks: number
+  distance_m: number
   distance: number
   waiting: number
   queue_wait: number
@@ -36,7 +38,7 @@ type Answer = { answer: string | null; facts: string[]; tick: number; source?: s
 type Comparison = { rules: Metrics & {elapsed_ms: number}; model: Metrics & {source: string; elapsed_ms: number} }
 
 const metrics: [keyof Metrics, string][] = [
-  ['completed', 'Выполнено заказов'], ['ticks', 'Такты смены'], ['distance', 'Пройдено клеток'],
+  ['completed', 'Выполнено заказов'], ['ticks', 'Такты смены'], ['distance_m', 'Пройдено, м'],
   ['waiting', 'Ожидание техники, такты'], ['queue_wait', 'Ожидание заказов, такты'],
   ['requests', 'Запросы к модели'], ['tokens', 'Токены по отчёту провайдера'], ['fallbacks', 'Переходы на правила'],
 ]
@@ -150,7 +152,7 @@ function describeOption(value: unknown): string {
   if (Array.isArray(value)) return value.map(row => {
     const evidence = [
       `${row.quantity} шт.`,
-      `${row.distance_to_shipping_cells} клеток до отгрузки`,
+      `${Number(row.distance_to_shipping_cells) * NODE_SPACING_M} м до отгрузки`,
       `${row.packages_already_stored} шт. уже хранится`,
       `${row.previously_picked_packages} шт. отобрано ранее`,
     ].join(' · ')
@@ -160,8 +162,8 @@ function describeOption(value: unknown): string {
   if (typeof option.robot === 'string') {
     const pickups = Object.entries((option.pickups ?? {}) as Record<string, number>)
       .map(([address, count]) => `${address} · ${count} шт.`).join(', ')
-    return [option.robot, typeof option.distance === 'number' ? `${option.distance} клеток` : null, pickups].filter(Boolean).join(' · ')
+    return [option.robot, typeof option.distance === 'number' ? `${Number(option.distance) * NODE_SPACING_M} м` : null, pickups].filter(Boolean).join(' · ')
   }
-  const route = `${option.passes} · ${option.passage_cells} клеток`
+  const route = `${option.passes} · ${Number(option.passage_cells) * NODE_SPACING_M} м`
   return option.yields ? `${option.yields} уступает у (${option.wait_cell}) · ${route}` : route
 }

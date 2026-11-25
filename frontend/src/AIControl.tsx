@@ -9,7 +9,7 @@ export type AIState = {
   history: { id: string; time: string; role: string; scope: string; source: string; trigger: string; status: string; outcome: string; response: unknown; error: string | null; latency_ms: number | null; tokens: number | null }[]
 }
 
-const names: Record<string, string> = { manager: 'Менеджер', zone: 'Координатор проездов', storage: 'Размещение', robot: 'Консультант по технике', operator: 'Помощник диспетчера' }
+const names: Record<string, string> = { route: 'Навигатор погрузчика', manager: 'Менеджер', zone: 'Координатор проездов', storage: 'Размещение', robot: 'Консультант по технике', operator: 'Помощник диспетчера' }
 const connections: Record<string, string> = { unconfigured: 'Ключ не задан на сервере', unverified: 'Подключение ещё не проверено', connected: 'Получен корректный ответ', error: 'Ошибка подключения или ответа' }
 
 export default function AIControl({ api, ai, disabled, mode, agents }: {
@@ -57,7 +57,7 @@ export default function AIControl({ api, ai, disabled, mode, agents }: {
         <div><strong>{ai.last_latency_ms === null ? 'Нет данных' : `${ai.last_latency_ms} мс`}</strong><span>последний ответ</span></div>
       </div>
       {ai.unknown_usage > 0 && <p>В {ai.unknown_usage} ответах провайдер не сообщил расход. Лимит запросов продолжает действовать.</p>}
-      {ai.budget_exhausted && <p role="status">Лимит исчерпан. Назначения продолжатся по правилам. Можно увеличить лимит в настройках.</p>}
+      {ai.budget_exhausted && <p role="status">Лимит исчерпан. Назначения продолжатся по правилам. В режиме ИИ погрузчики будут ждать новых маршрутов до восстановления доступа. Можно увеличить лимит в настройках.</p>}
       {ai.last_error && <p role="status">{ai.last_error}{ai.cooldown_seconds > 0 ? ` · пауза ${ai.cooldown_seconds} с` : ''}</p>}
     </section>
     <details>
