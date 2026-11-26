@@ -14,6 +14,7 @@ from backend import dispatch
 from backend.llm import consult
 from backend.harness import Settings, harness_for
 from backend.planning import compare_shift, plan_zone, planning_pass
+from backend.route_advisor import plan_routes
 from backend.simulation import WarehouseSimulation
 from backend.layout import Layout, from_warehouse
 from backend.rack_types import RACK_TYPES, generated_cargo_dimensions, pack_packages
@@ -84,26 +85,38 @@ async def simulation_loop() -> None:
             await broadcast(state)
         # Include calculation and broadcast time in the tick interval.
         elapsed = loop.time() - started
-        await asyncio.sleep(max(0.0, simulation.TICK_SECONDS - elapsed))
+        await asyncio.sleep(max(0.0, simulation.TICK_SECONDS / simulation.speed - elapsed))
 
 
 async def assignment_loop() -> None:
     async with model_client() as client:
         while True:
-            if simulation.dispatch_mode in ("model", "demo") and await planning_pass(simulation, client):
+            if simulation.dispatch_mode in ("model", "demo") and await planning_pass(simulation, client, plan_motion=False):
                 await publish_state()
+            await asyncio.sleep(0.2)
+
+
+async def motion_planning_loop() -> None:
+    async with model_client() as client:
+        while True:
+            if simulation.running and simulation.dispatch_mode in ("model", "demo"):
+                changed = await plan_zone(simulation, client)
+                if simulation.dispatch_mode == "model":
+                    changed = await plan_routes(simulation, client) or changed
+                if changed:
+                    await publish_state()
             await asyncio.sleep(simulation.TICK_SECONDS)
 
 
 async def broadcast(state: dict) -> None:
-    stale: list[WebSocket] = []
-    for websocket in tuple(connections):
+    async def send(websocket: WebSocket) -> None:
         try:
-            await websocket.send_json(state)
+            async with asyncio.timeout(2):
+                await websocket.send_json(state)
         except Exception:
-            stale.append(websocket)
-    for websocket in stale:
-        connections.discard(websocket)
+            connections.discard(websocket)
+
+    await asyncio.gather(*(send(websocket) for websocket in tuple(connections)))
 
 
 async def publish_state() -> dict:
@@ -116,6 +129,7 @@ async def publish_state() -> dict:
 async def lifespan(_: FastAPI):
     tasks = [asyncio.create_task(simulation_loop())]
     tasks.append(asyncio.create_task(assignment_loop()))
+    tasks.append(asyncio.create_task(motion_planning_loop()))
     try:
         yield
     finally:
@@ -261,6 +275,16 @@ async def start_simulation() -> dict:
 @app.post("/api/simulation/pause")
 async def pause_simulation() -> dict:
     simulation.pause()
+    return await publish_state()
+
+
+class SimulationSpeedRequest(BaseModel):
+    speed: Literal[1, 2, 5, 10]
+
+
+@app.post("/api/simulation/speed")
+async def change_simulation_speed(request: SimulationSpeedRequest) -> dict:
+    simulation.speed = request.speed
     return await publish_state()
 
 

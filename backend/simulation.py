@@ -29,10 +29,12 @@ class WarehouseSimulation:
         self.custom_layout = None
         self.dispatch_mode = "rules"
         self.model_available = False
+        self.speed = 1
         self.revision = 0
         self.reset()
 
     def reset(self) -> None:
+        self.detour_edges: set[tuple[Point, Point]] = set()
         self.model_routes = {}
         prior_inventory = self.warehouse.inventory if hasattr(self, "warehouse") else []
         obstacles = [(x, y) for x in range(4, 8) for y in (1, 2, 4, 5)]
@@ -229,6 +231,7 @@ class WarehouseSimulation:
         warehouse["closed_cells"] = [list(point) for point in sorted(self.zone_agent.blocked_cells)]
         return {
             "running": self.running,
+            "speed": self.speed,
             "tick": self.tick_count,
             "can_create_congestion": self._congestion_candidate() is not None,
             "warehouse": warehouse,
@@ -730,6 +733,8 @@ class WarehouseSimulation:
                     order.status = "picking"
                 self._event(f"{robot.id} прибыл: {self._location_address(order.storage_location_id) if picking else 'Вывоз'}. Требуется подтверждение водителя.", "system", robot_id=robot.id, order_id=order.id)
 
+        if assign_orders:
+            self.assign_orders()
         return self.state()
 
     def _pending_orders(self) -> list[Order]:
@@ -882,7 +887,7 @@ class WarehouseSimulation:
         if route:
             cell = route[0]
             blocked = set(self.warehouse.obstacles) | {r.position for r in self.warehouse.racks} | self.zone_agent.blocked_cells | occupied
-            if cell not in blocked and (self.roads() is None or (robot.position, cell) in self.roads()) and permits(self.warehouse.lanes, robot.position, cell) and sum(abs(a-b) for a, b in zip(robot.position, cell)) == 1:
+            if cell not in blocked and (self.roads() is None or (robot.position, cell) in self.roads() or (robot.position, cell) in self.detour_edges) and permits(self.warehouse.lanes, robot.position, cell) and sum(abs(a-b) for a, b in zip(robot.position, cell)) == 1:
                 desired = self._heading(robot.position, cell)
                 if robot.heading != desired:
                     self._turn(robot, desired)
@@ -926,7 +931,7 @@ class WarehouseSimulation:
         heading: int | None = None,
     ) -> list[Point] | None:
         planner = self.robot_agent.plan_route if heading is None else self.robot_agent.driving_route
-        return planner(
+        arguments = dict(
             **({} if heading is None else {"heading": heading}),
             start=start,
             goal=goal,
@@ -937,6 +942,17 @@ class WarehouseSimulation:
             lanes=self.warehouse.lanes,
             roads=self.roads(),
         )
+        route = planner(**arguments)
+        if route is not None or self.roads() is None:
+            return route
+        # Leave the road only to bypass vehicles, or to rejoin after a detour.
+        on_road = any(start == a or start == b for a, b in self.roads())
+        if on_road and (not occupied or planner(**{**arguments, "occupied": set()}) is None):
+            return None
+        route = planner(**{**arguments, "roads": None})
+        if route:
+            self.detour_edges.update(zip([start, *route], route))
+        return route
 
     def _get_robot(self, robot_id: str) -> Robot:
         for robot in self.warehouse.robots:

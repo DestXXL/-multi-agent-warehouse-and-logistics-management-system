@@ -1,5 +1,6 @@
 """Coordinate model requests and run an isolated comparison shift."""
 
+import asyncio
 import httpx
 
 from backend.route_advisor import plan_routes
@@ -9,7 +10,7 @@ from backend.harness import harness_for
 from backend.simulation import WarehouseSimulation
 
 
-async def planning_pass(sim, client: httpx.AsyncClient | None = None, *, request_limit: int | None = None) -> bool:
+async def planning_pass(sim, client: httpx.AsyncClient | None = None, *, request_limit: int | None = None, plan_motion: bool = True) -> bool:
     if not sim.running:
         return False
     use_model = sim.dispatch_mode in ("model", "demo")
@@ -26,7 +27,11 @@ async def planning_pass(sim, client: httpx.AsyncClient | None = None, *, request
                 payload = {**proposal.payload(), "plans": batches, "tick": sim.tick_count,
                            "closed_cells": sorted(sim.zone_agent.blocked_cells)}
                 warehouse, mode = sim.warehouse, sim.dispatch_mode
-                response = await consult(client, sim, "manager", payload) if client is not None or sim.dispatch_mode == "demo" else None
+                try:
+                    async with asyncio.timeout(2):
+                        response = await consult(client, sim, "manager", payload) if client is not None or sim.dispatch_mode == "demo" else None
+                except TimeoutError:
+                    response = None
                 if not sim.running or sim.dispatch_mode != mode or sim.warehouse is not warehouse:
                     harness_for(sim).resolve(response, "Отклонено: смена или режим изменились")
                     return False
@@ -51,6 +56,11 @@ async def planning_pass(sim, client: httpx.AsyncClient | None = None, *, request
                     dispatch.record(sim, proposal, [], "fallback", f"{reason} Назначения рассчитаны правилами.",
                                     batches=batches)
                     changed = sim.assign_orders()
+                # A valid model plan may leave usable robots idle. Fill those
+                # slots using the same stock, capacity and route checks.
+                changed = sim.assign_orders() or changed
+    if not plan_motion:
+        return changed
     if request_limit is not None and sim.metrics["requests"] >= request_limit:
         client = None
     if sim.dispatch_mode == "model":

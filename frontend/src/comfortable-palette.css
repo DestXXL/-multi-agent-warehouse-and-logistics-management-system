@@ -1,0 +1,105 @@
+/* Indigo #340068, coral #FF6978, porcelain #FFFCF9,
+   aqua #B1EDE8 and mauve #6D435A. */
+:root[data-design="artdeco"]{
+  --background:#342d47;--surface:#4c3b54;--surface-raised:#60445d;
+  --line:#a384a0;--ink:#fffcf9;--muted:#ead8e5;--accent:#b1ede8;
+  --action:#ff6978;--action-ink:#340068;--success:#b1ede8;
+  --warning:#e6b9a2;--error:#ff9ca6;--route:#b1ede8;
+  --map-surface:#514555;--toolbar-bg:#4c3b54;
+  --floor:#5a4e60;--board:#514555;--grid:#77657d;--wall:#342d47;
+  --rack-fill:#89758e;--rack-edge:#d6bfd9;--map-text:#fffcf9;--map-muted:#dbc8dd;
+  --map-accent:#b1ede8;--box:#d2a594;--box-edge:#654358;
+  --vehicle:#ff8793;--vehicle-edge:#ffe3e4;--cabin:#340068;
+  --pattern:repeating-linear-gradient(135deg,#b1ede80b 0 1px,transparent 1px 22px),radial-gradient(ellipse at top,#6d435a55,transparent 55%);
+}
+:root[data-theme="light"][data-design="artdeco"]{
+  --background:#cbbfce;--surface:#e5dce5;--surface-raised:#d5c8db;
+  --line:#95738f;--ink:#340068;--muted:#6d435a;--accent:#685084;
+  --action:#ff6978;--action-ink:#340068;--success:#326d67;
+  --warning:#795039;--error:#9d354c;--route:#356f74;
+  --map-surface:#b9adbf;--toolbar-bg:#e5dce5;
+  --floor:#c3b8c9;--board:#b9adbf;--grid:#a597b0;--wall:#7b6787;
+  --rack-fill:#ab93b6;--rack-edge:#5c3e70;--map-text:#362344;--map-muted:#60486d;
+  --map-accent:#685084;--box:#c29188;--box-edge:#684451;
+  --vehicle:#ba536b;--vehicle-edge:#633354;--cabin:#fffcf9;
+  --pattern:repeating-linear-gradient(135deg,#34006812 0 1px,transparent 1px 22px),radial-gradient(ellipse at top,#b1ede830,transparent 55%);
+}
+/* Original gradient directions, print spacing and frame layers are retained. */
+:root[data-design="artdeco"] .app-navigation{background:linear-gradient(180deg,var(--surface),var(--background))}
+:root[data-design="artdeco"] .topbar{background:linear-gradient(90deg,var(--surface),var(--surface-raised))}
+:root[data-design="artdeco"] .app-navigation .active{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--accent) 8%,transparent) 0 2px,transparent 2px 7px)}
+:root[data-design="artdeco"] .module-launcher>button{background:linear-gradient(145deg,var(--surface-raised),var(--surface));color:var(--ink)}
+:root[data-design="artdeco"] .simulation-speed,
+:root[data-design="artdeco"] .scene-speedometer{background:linear-gradient(135deg,var(--surface-raised),var(--surface));color:var(--ink)}
+:root[data-design="artdeco"] .module-launcher>button:hover,
+:root[data-design="artdeco"] .module-launcher>button[aria-expanded="true"]{background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 14%,var(--surface-raised)),var(--surface));border-color:var(--accent)}
+:root[data-design="artdeco"] input,:root[data-design="artdeco"] select,:root[data-design="artdeco"] textarea{background:var(--surface-raised);color:var(--ink);border-color:var(--line)}
+:root[data-design="artdeco"] input::placeholder,:root[data-design="artdeco"] textarea::placeholder{color:var(--muted);opacity:1}
+:root[data-design="artdeco"] .muted,:root[data-design="artdeco"] .metric-label,:root[data-design="artdeco"] .map-legend,:root[data-design="artdeco"] .scene-caption{color:var(--muted)}
+:root[data-design="artdeco"] .page-heading h1{color:var(--ink);text-shadow:inherit}
+:root[data-design="artdeco"] .scene-viewport{
+  --map-board:var(--board);--map-floor:var(--floor);--map-grid:var(--grid);--map-border:var(--map-accent);
+  --map-wall:var(--wall);--map-rack:var(--rack-fill);--map-rack-edge:var(--rack-edge);
+  background:var(--board);
+}
+:root[data-design="artdeco"] .warehouse-scene{
+  --ink:var(--map-text);--muted:var(--map-muted);--accent:var(--map-accent);--surface:var(--board);
+  background:var(--board);
+}
+:root[data-design="artdeco"] .scene-rack-label,
+:root[data-design="artdeco"] .scene-robot-label{fill:var(--map-text);stroke:var(--floor);paint-order:stroke;stroke-width:3px;font-weight:700}
+:root[data-design="artdeco"] .scene-axis{fill:var(--map-text);font-weight:600}
+:root[data-design="artdeco"] .scene-package{fill:var(--box);stroke:var(--box-edge);stroke-width:.8}
+:root[data-design="artdeco"] .rack-frame{stroke:var(--rack-edge);stroke-width:2.4}
+:root[data-design="artdeco"] .scene-route{stroke:var(--route);stroke-width:4}
+:root[data-design="artdeco"] .scene-zone.shipping rect{fill:color-mix(in srgb,var(--map-accent) 15%,transparent);stroke:var(--map-accent);stroke-width:2}
+:root[data-design="artdeco"] .scene-zone.shipping text{fill:var(--map-text);font-weight:700}
+:root[data-design="artdeco"] .scene-target rect{fill:color-mix(in srgb,var(--route) 15%,transparent);stroke:var(--route);stroke-width:2}
+:root[data-design="artdeco"] .scene-target text{fill:var(--map-text)}
+:root[data-design="artdeco"] .scene-robot .robot-body{fill:var(--vehicle);stroke:var(--vehicle-edge);stroke-width:1.5}
+:root[data-design="artdeco"] .scene-robot.waiting .robot-body{fill:var(--warning);stroke:var(--vehicle-edge)}
+:root[data-design="artdeco"] .scene-robot.stopped .robot-body{fill:var(--error);stroke:var(--vehicle-edge)}
+:root[data-design="artdeco"] .scene-robot.selected .robot-hit-area{fill:color-mix(in srgb,var(--route) 10%,transparent);stroke:var(--route);stroke-width:2.5}
+:root[data-design="artdeco"] .robot-cabin{fill:var(--cabin);stroke:var(--vehicle-edge)}
+:root[data-design="artdeco"] .robot-forks{stroke:var(--vehicle-edge);stroke-width:2.4}
+:root[data-design="artdeco"] .layout-cell{background:var(--floor);color:var(--map-text);border-color:var(--grid)}
+:root[data-design="artdeco"] .layout-cell.rack{background:var(--rack-fill);color:var(--map-text);border-color:var(--rack-edge)}
+:root[data-design="artdeco"] .layout-cell.wall{background:var(--wall);color:var(--ink)}
+:root[data-design="artdeco"] .layout-cell.shipping{background:var(--surface-raised);color:var(--ink)}
+:root[data-design="artdeco"] .layout-cell.robot{background:var(--vehicle);color:var(--map-text)}
+/* Glow and decorative outlines follow the current palette accent. */
+:root[data-design="artdeco"]{
+  --glow:var(--accent);
+  --panel-shadow:0 0 0 1px color-mix(in srgb,var(--glow) 27%,transparent),inset 0 0 0 5px color-mix(in srgb,var(--glow) 5%,transparent);
+}
+:root[data-design="artdeco"] .module-launcher>button:hover,
+:root[data-design="artdeco"] .module-launcher>button[aria-expanded="true"]{
+  box-shadow:0 0 12px color-mix(in srgb,var(--glow) 18%,transparent),inset 0 0 0 1px var(--glow);
+}
+:root[data-design="artdeco"] .app-navigation .active{box-shadow:inset 0 0 0 1px var(--glow),inset 0 0 0 4px color-mix(in srgb,var(--glow) 12%,transparent)}
+:root[data-design="artdeco"] .workspace:not(.driver-workspace) .panel[role="dialog"]{box-shadow:0 18px 60px #0007,0 0 0 1px color-mix(in srgb,var(--glow) 60%,transparent)!important}
+:root[data-design="artdeco"] .scene-rack:hover .rack-hit-area,
+:root[data-design="artdeco"] .scene-rack.selected .rack-hit-area{stroke:var(--accent);fill:color-mix(in srgb,var(--accent) 8%,transparent)}
+:root[data-design="artdeco"] button:focus-visible{outline-color:var(--glow)}
+/* Decorative outlines follow the palette without changing prints or shapes. */
+:root[data-design="artdeco"]{--outline-color:var(--accent)}
+:root[data-design="artdeco"] button:not(.layout-cell):not(.dialog-resize-grip),
+:root[data-design="artdeco"] .app-navigation a,
+:root[data-design="artdeco"] .driver-link{
+  border:1px solid var(--outline-color);
+}
+:root[data-design="artdeco"] .module-launcher>button,
+:root[data-design="artdeco"] .driver-task-trigger{
+  border-color:var(--outline-color);
+  box-shadow:inset 0 0 0 3px color-mix(in srgb,var(--outline-color) 9%,transparent),0 0 0 1px color-mix(in srgb,var(--outline-color) 18%,transparent);
+}
+:root[data-design="artdeco"] .map-panel,
+:root[data-design="artdeco"] .tablet-map,
+:root[data-design="artdeco"] .scene-container,
+:root[data-design="artdeco"] .layout-grid-scroll{
+  border:1px solid var(--outline-color);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--outline-color) 28%,transparent),inset 0 0 0 4px color-mix(in srgb,var(--outline-color) 5%,transparent);
+}
+:root[data-design="artdeco"] .scene-toolbar{border-bottom:1px solid var(--outline-color)}
+:root[data-design="artdeco"] .scene-caption{border-top:1px solid color-mix(in srgb,var(--outline-color) 55%,transparent)}
+:root[data-design="artdeco"] button:disabled{border-color:color-mix(in srgb,var(--outline-color) 45%,var(--surface))}

@@ -7,6 +7,17 @@ from backend.simulation import WarehouseSimulation
 
 
 class ModelRoutes(unittest.IsolatedAsyncioTestCase):
+    async def test_unavailable_model_uses_valid_route(self):
+        sim = WarehouseSimulation()
+        sim.dispatch_mode = 'model'
+        sim.start()
+        robot = next(r for r in sim.warehouse.robots if r.order_id)
+        sim.driver_action(robot.id, robot.order_id, 'accept')
+        with patch('backend.route_advisor.consult', AsyncMock(return_value=None)):
+            self.assertTrue(await plan_routes(sim, object()))
+        self.assertTrue(sim.approved_route(robot))
+        self.assertGreater(sim.metrics['fallbacks'], 0)
+
     async def test_wait_reject_accept_and_stop_at_closure(self):
         sim = WarehouseSimulation()
         sim.dispatch_mode = "model"
