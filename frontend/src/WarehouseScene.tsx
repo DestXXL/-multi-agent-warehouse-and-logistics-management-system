@@ -7,6 +7,7 @@ import { formatDimensions, formatPercent, occupancyPercent } from './units'
 
 type Point = [number, number]
 type Props = {
+  running: boolean; simulationSpeed: number
   warehouse: { roads?: { edges: [Point, Point][]; stops: Point[] }; lanes?: Lane[]; width: number; height: number; racks: Rack[]; robots: Robot[]; storage_locations: StorageLocation[]; obstacles: Point[]; closed_cells: Point[]; pickup_points: Point[]; shipping_points: Point[] }
   scale: { cellStepM: number; forkliftLengthM: number; forkliftWidthM: number }
   selectedRack: string | null; selectedRobot: string | null; target?: Point | null
@@ -14,7 +15,7 @@ type Props = {
 }
 
 /** Orthographic floor plan. Every physical length uses the same mm-to-scene ratio. */
-export default function WarehouseScene({ warehouse: w, scale, selectedRack, selectedRobot, target, onRack, onRobot }: Props) {
+export default function WarehouseScene({ warehouse: w, scale, selectedRack, selectedRobot, target, onRack, onRobot, running, simulationSpeed }: Props) {
   const id = useId().replace(/:/g, '')
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -93,6 +94,11 @@ export default function WarehouseScene({ warehouse: w, scale, selectedRack, sele
       </div>
     </div>
     <div ref={viewportRef} className="scene-viewport" style={viewportSize ? { width: `${viewportSize.width}px`, height: `${viewportSize.height}px` } : undefined}>
+      <div className="scene-speedometer" aria-label="Скорость выбранного погрузчика">
+        <small>{route ? `ПОГРУЗЧИК ${route.id}` : 'СКОРОСТЬ ПОГРУЗЧИКА'}</small>
+        <strong>{route ? (running && route.motion === 'moving' && !route.stopped_by_operator ? '5,4' : '0') : '—'} <span>км/ч</span></strong>
+        <small>{!route ? 'Выберите погрузчик на карте' : !running ? 'На паузе' : route.stopped_by_operator ? 'Остановлен оператором' : route.motion === 'moving' ? 'Движение · 1,5 м/с' : route.motion === 'turning' ? 'Поворот на месте' : 'Стоит'} · время ×{simulationSpeed}</small>
+      </div>
       <svg ref={svg} className="warehouse-scene" viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Интерактивная карта склада. Стеллажи и погрузчики доступны клавишей Tab." tabIndex={0}
         onKeyDown={event => {
           if (event.target !== event.currentTarget) return

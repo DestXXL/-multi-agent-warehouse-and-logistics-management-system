@@ -1,5 +1,6 @@
 import { metricPoint, NODE_SPACING_M } from './units'
 import { serverUrl as API } from './server'
+import DriverQueue from './DriverQueue'
 import InventoryBook, { type Movement } from './InventoryBook'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
@@ -97,6 +98,7 @@ function readPhysicalScale(): PhysicalScale {
 }
 
 type State = {
+  speed?: number
   stock_movements?: Movement[]
   running: boolean
   tick: number
@@ -307,10 +309,12 @@ function App() {
   }
 
   async function command(path: string, body?: unknown) {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 10000)
     setBusy(true)
     setError('')
     try {
-      const response = await fetch(`${API}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+      const response = await fetch(`${API}${path}`, { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
       if (!response.ok) {
         const problem = (await response.json()) as { detail?: string }
         throw new Error(problem.detail || 'Команда не выполнена.')
@@ -319,6 +323,7 @@ function App() {
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : 'Не удалось связаться с сервером.')
     } finally {
+      window.clearTimeout(timeout)
       setBusy(false)
     }
   }
@@ -343,7 +348,7 @@ function App() {
   const visibleEvents = state.events.filter(event => eventSource === 'all' || event.source === eventSource)
   const togglePanel = (panel: DashboardPanel) => setActivePanel(current => current === panel ? null : panel)
   const startPanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!activePanel || event.button !== 0) return
+    if (!activePanel || event.button !== 0 || (event.target as HTMLElement).closest('button')) return
     panelDrag.current = { x: event.clientX, y: event.clientY, offsetX: panelOffset.x, offsetY: panelOffset.y }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -362,22 +367,22 @@ function App() {
   const panelStyle = { '--panel-drag-x': `${panelOffset.x}px`, '--panel-drag-y': `${panelOffset.y}px` } as CSSProperties
   return (
     <div className={`app-shell ${activePanel ? `dialog-${activePanel}` : ''}`} style={panelStyle}>
-      <Navigation screen={screen} onChange={nextScreen => { setActivePanel(null); setScreen(nextScreen) }} />
+
       {detailRackData && createPortal(<RackDetails key={detailRackData.id} rack={detailRackData} locations={warehouse!.storage_locations.filter(location => location.rack_id === detailRackData.id)} onClose={() => setDetailRackId(null)} />, document.body)}
       {activePanel && createPortal(<div className="module-dialog-backdrop" aria-hidden="true" onMouseDown={event => { if (event.target === event.currentTarget) setActivePanel(null) }} />, document.body)}
-      {activePanel && activePanel !== 'object' && createPortal(<button className="module-dialog-close" type="button" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button>, document.body)}
+
       {toasts.length > 0 && <div className="toast-stack" role="status" aria-live="polite">{toasts.map(toast => <div className="event-toast" key={toast.id}><span className={`toast-source ${toast.source}`} /><p>{toast.message}</p><button type="button" aria-label="Закрыть уведомление" onClick={() => setToasts(current => current.filter(item => item.id !== toast.id))}>×</button></div>)}</div>}
       <header className="topbar">
         <div className="brand-lockup"><div className="brand-mark">W</div><div><strong>Центр управления складом</strong></div></div>
         <div className="topbar-center"><span className={`connection-dot ${connection}`} />{connection === 'online' ? 'На связи' : 'Нет связи'}</div>
-        <div className="topbar-right"><ThemeToggle /><span className={`simulation-badge ${state.running ? 'is-running' : ''}`}><span />{state.running ? 'Симуляция активна' : 'На паузе'}</span><button className="header-start" disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Приостановить' : 'Запустить'}</button>{screen === 'driver' && <span className="live-clock">Такт · {state.tick}</span>}</div>
+        <Navigation screen={screen} onChange={nextScreen => { setActivePanel(null); setScreen(nextScreen) }} /><div className="topbar-right"><ThemeToggle /><button type="button" className="simulation-speed" disabled={busy || connection !== 'online'} title="Ускорение времени симуляции: ×1, ×2, ×5, ×10. Подтверждения водителя сохраняются." aria-label={`Скорость симуляции ×${state.speed ?? 1}. Нажмите для переключения`} onClick={() => { const speeds = [1, 2, 5, 10]; void command('/api/simulation/speed', { speed: speeds[(speeds.indexOf(state.speed ?? 1) + 1) % speeds.length] }) }}>⏩ ×{state.speed ?? 1}</button><span className={`simulation-badge ${state.running ? 'is-running' : ''}`}><span />{state.running ? 'Симуляция активна' : 'На паузе'}</span><button className="header-start" disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Приостановить' : 'Запустить'}</button>{screen === 'driver' && <span className="live-clock">Такт · {state.tick}</span>}</div>
       </header>
 
       <main className={`workspace ${screen === 'driver' ? 'driver-workspace' : ''}`}>
         {error && <div className="workflow-error" role="alert">{error}</div>}
         {connection === 'offline' && <div className="workflow-error" role="status">Связь потеряна. Показано последнее известное состояние; команды недоступны.</div>}
         {screen === 'driver' ? (
-          driverRobot ? <DriverTablet initialTaskOpen={openDriverTask} robot={driverRobot} robots={robots} order={driverOrder} cells={<WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={driverRobot.id} target={driverOrder ? (['offered', 'to_pickup', 'confirm_pickup'].includes(driverRobot.driver_phase) ? driverOrder.pickup : driverOrder.dropoff) : driverRobot.driver_phase === 'returning' ? driverRobot.home : null} onRack={id => setDetailRackId(id)} onRobot={setDriverId} />} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
+          driverRobot ? <DriverTablet orders={orders} initialTaskOpen={openDriverTask} robot={driverRobot} robots={robots} order={driverOrder} cells={<WarehouseScene running={state.running} simulationSpeed={state.speed ?? 1} warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={driverRobot.id} target={driverOrder ? (['offered', 'to_pickup', 'confirm_pickup'].includes(driverRobot.driver_phase) ? driverOrder.pickup : driverOrder.dropoff) : driverRobot.driver_phase === 'returning' ? driverRobot.home : null} onRack={id => setDetailRackId(id)} onRobot={setDriverId} />} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
         ) : <>
         <section className="main-column">
           <div className="page-heading">
@@ -424,13 +429,13 @@ function App() {
               running={state.running} onVehicle={selectRobot} onClosures={() => setActivePanel('control')} />
             <details className="scale-settings"><summary>Масштаб и габариты техники</summary><div className="map-dimension-controls"><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div></details>
             <div className="map-legend"><span><i className="legend-dot robot-dot" /> Погрузчик</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> {highlightedRobotId ? `Маршрут ${highlightedRobotId}` : 'Маршрут по выбору'}</span><span><i className="legend-box aisle-dot" /> Проезд · м</span><span className="aisle-warning-legend">Красный – уже погрузчика</span>{highlightedRobotId && <button className="clear-route-button" type="button" onClick={() => setHighlightedRobotId(null)}>Снять выделение</button>}</div>
-            <WarehouseScene warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={highlightedRobotId} onRack={selectRack} onRobot={selectRobot} />
+            <WarehouseScene running={state.running} simulationSpeed={state.speed ?? 1} warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={highlightedRobotId} onRack={selectRack} onRobot={selectRobot} />
           </section>
 
           <ObjectInspector rack={selectedRackData} robot={selectedOrder ? undefined : selectedRobot} order={selectedOrder} phase={selectedRobot ? phaseNames[selectedRobot.driver_phase] : undefined} status={selectedOrder ? orderNames[selectedOrder.status] : undefined} isOpen={activePanel === 'object'} onDragStart={startPanelDrag} onDragMove={movePanelDrag} onDragEnd={endPanelDrag} onClose={() => { setSelectedRackId(null); setHighlightedRobotId(null); setSelectedOrderId(null); setActivePanel(null) }} onRackDetails={() => { setDetailRackId(selectedRackId); setActivePanel(null) }} />
           <div className="lower-grid">
             <section className="panel orders-panel" id="orders" role={activePanel === 'orders' ? 'dialog' : undefined} aria-hidden={activePanel !== 'orders'} aria-labelledby="orders-panel-title">
-              <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="orders-panel-title">Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span></div>
+              <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="orders-panel-title">Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
               <div className="order-tools"><div className="order-search"><input value={orderQuery} onChange={event => setOrderQuery(event.target.value)} placeholder="Заказ или товар" aria-label="Поиск заказов" /><button type="button" aria-label="Очистить поиск" onClick={() => setOrderQuery('')} disabled={!orderQuery}>×</button></div><label className="order-filter"><span>Статус</span><select value={orderStatusFilter} onChange={event => setOrderStatusFilter(event.target.value as OrderStatusFilter)} aria-label="Фильтр по статусу"><option value="all">Все</option>{Object.entries(orderNames).map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select></label></div>
               <div className="order-list">
                 {filteredOrders.map((order) => <OrderRow key={order.id} order={order} highlightedRobotId={highlightedRobotId} onShowRoute={showOrderRoute} onSelect={() => { setSelectedOrderId(order.id); setSelectedRackId(null); setHighlightedRobotId(order.robot_id); setActivePanel('object') }} />)}
@@ -438,7 +443,7 @@ function App() {
               </div>
             </section>
           <section className="panel activity-panel" role={activePanel === 'activity' ? 'dialog' : undefined} aria-hidden={activePanel !== 'activity'} aria-labelledby="activity-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="activity-panel-title">Журнал событий</h2></div><span className="activity-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="activity-panel-title">Журнал событий</h2></div><span className="activity-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
             <label className="event-filter">Источник <select value={eventSource} onChange={event => setEventSource(event.target.value)}><option value="all">Все события</option>{Object.entries(sourceNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
             <div className="event-list">
               {visibleEvents.slice(0, 30).map((event, index) => <div className="event-row" key={event.id}><div className={`event-line ${event.source}`}><i /></div><div className="event-copy"><div><span className={`source-label ${event.source}`}>{sourceNames[event.source] ?? event.source}</span><time>{new Date(event.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time></div><p>{event.message}</p></div>{index === 0 && state.running && <span className="new-event">Сейчас</span>}</div>)}
@@ -446,14 +451,14 @@ function App() {
             <div className="all-events">Показано {Math.min(30, visibleEvents.length)} из {visibleEvents.length} событий</div>
           </section>
             <section className="panel fleet-panel" role={activePanel === 'fleet' ? 'dialog' : undefined} aria-hidden={activePanel !== 'fleet'} aria-labelledby="fleet-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="fleet-panel-title">Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span></div>
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="fleet-panel-title">Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
               <div className="fleet-list">
                 {robots.map((robot) => <div className={`fleet-row ${highlightedRobotId === robot.id ? 'is-selected' : ''}`} key={robot.id}><div className="fleet-info"><strong>{robot.id}<small>{phaseNames[robot.driver_phase]}</small></strong><span>{robot.order_id ? `Задание ${robot.order_id}` : 'Нет активного задания'}</span></div><button type="button" className="fleet-map-button" aria-pressed={highlightedRobotId === robot.id} onClick={() => selectRobot(robot.id)}>{highlightedRobotId === robot.id ? 'На карте ✓' : 'Показать'}</button><a className="driver-link" href={`?view=driver&vehicle=${robot.id}`} target="_blank" rel="noreferrer">Планшет ↗</a><button className="stop-button" aria-label={`${robot.status === 'stopped' ? 'Продолжить' : 'Остановить'} ${robot.id}`} disabled={busy || connection !== 'online'} onClick={() => command(`/api/robots/${robot.id}/${robot.status === 'stopped' ? 'resume' : 'stop'}`)}>{robot.status === 'stopped' ? '▶' : 'Ⅱ'}</button></div>)}
               </div>
             </section>
           </div>
           <section className="panel inventory-panel" role={activePanel === 'inventory' ? 'dialog' : undefined} aria-hidden={activePanel !== 'inventory'} aria-labelledby="inventory-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="inventory-panel-title">Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span></div>
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="inventory-panel-title">Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
             <div className="stock-tools">
               <p>На складе <b>{stockTotal}</b> · В резерве <b>{reservedTotal}</b> · Доступно <b>{stockTotal - reservedTotal}</b></p>
               <input type="search" aria-label="Поиск по запасам" placeholder="Название, код товара или адрес" value={stockQuery} onChange={event => setStockQuery(event.target.value)} />
@@ -476,7 +481,7 @@ function App() {
         <aside className="side-column">
 
           <section className="panel control-panel" role={activePanel === 'control' ? 'dialog' : undefined} aria-hidden={activePanel !== 'control'} aria-labelledby="control-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="control-panel-title">Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /></div>
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="control-panel-title">Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
             <p className="control-copy">{state.running ? 'Откройте планшет водителя: примите задание, подтвердите забор и доставку. Движение моделируется автоматически.' : 'Запустите симуляцию, чтобы начать складскую операцию.'}</p>
             <button className={`primary-button ${state.running ? 'pause-action' : ''}`} disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Приостановить' : 'Начать симуляцию'}</button>
             <button className="congestion-button" disabled={busy || connection !== 'online' || !state.can_create_congestion} onClick={() => command('/api/simulation/congestion')}>Смоделировать затор</button>
@@ -485,7 +490,7 @@ function App() {
           </section>
 
           <section className="panel agent-panel" role={activePanel === 'agents' ? 'dialog' : undefined} aria-hidden={activePanel !== 'agents'} aria-labelledby="agents-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="agents-panel-title">ИИ и агенты</h2></div></div>
+            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="agents-panel-title">ИИ и агенты</h2></div><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
             {state.dispatch ? <DispatchPanel api={API} dispatch={state.dispatch} disabled={busy || connection !== 'online'}
               onMode={mode => void command('/api/dispatch/mode', { mode })}
               targets={[...warehouse!.orders.map(order => order.id), ...robots.map(robot => robot.id)]} />
@@ -555,11 +560,29 @@ function ShiftAttention({ robots, closures, online, running, onVehicle, onClosur
   </section>
 }
 
-function DriverTablet({ initialTaskOpen, robot, robots, order, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
-  initialTaskOpen: boolean; robot: Robot; robots: Robot[]; order?: Order; cells: React.ReactNode; physicalScale: PhysicalScale;
+function DriverTablet({ orders, initialTaskOpen, robot, robots, order, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
+  orders: Order[]; initialTaskOpen: boolean; robot: Robot; robots: Robot[]; order?: Order; cells: React.ReactNode; physicalScale: PhysicalScale;
   running: boolean; busy: boolean; online: boolean; events: EventItem[];
   onSelect: (id: string) => void; onCommand: (path: string, body?: unknown) => Promise<void>;
 }) {
+  const [fleetOpen, setFleetOpen] = useState(false)
+  const [queueOpen, setQueueOpen] = useState(false)
+  const [acceptingAll, setAcceptingAll] = useState(false)
+  const acceptLock = useRef(false)
+  const offeredRobots = robots.filter(vehicle => vehicle.driver_phase === 'offered' && vehicle.order_id && !vehicle.stopped_by_operator)
+  async function acceptAllOrders() {
+    if (busy || !online || acceptLock.current || !offeredRobots.length) return
+    acceptLock.current = true
+    setAcceptingAll(true)
+    try {
+      for (const vehicle of offeredRobots) {
+        await onCommand(`/api/robots/${vehicle.id}/driver-action`, { order_id: vehicle.order_id, action: 'accept' })
+      }
+    } finally {
+      acceptLock.current = false
+      setAcceptingAll(false)
+    }
+  }
   const [taskOpen, setTaskOpen] = useState(initialTaskOpen)
   const [taskOffset, setTaskOffset] = useState({ x: 0, y: 0 })
   const taskDrag = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
@@ -607,8 +630,10 @@ function DriverTablet({ initialTaskOpen, robot, robots, order, cells, physicalSc
     confirm_delivery: 'Вы у места доставки. Разгрузите товар и подтвердите завершение.',
   }
   return <>
+    {fleetOpen && <DriverQueue controls orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setFleetOpen(false)} busy={busy || !online || acceptingAll} onCommand={onCommand} />}
+    {queueOpen && <DriverQueue orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setQueueOpen(false)} />}
     <section className={`driver-tablet ${taskOpen ? 'task-dialog-open' : ''}`}>
-    <header className="tablet-header"><div><div className="tablet-brand"><span className="brand-mark">W</span><strong>Планшет водителя</strong></div><label className="vehicle-select">Погрузчик <select value={robot.id} onChange={(event) => { setTaskOpen(false); onSelect(event.target.value) }}>{robots.map((vehicle) => <option key={vehicle.id}>{vehicle.id}</option>)}</select></label><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={taskOpen} onClick={() => setTaskOpen(true)}><span>Текущее задание</span><b>{order?.id ?? 'Ожидает'}</b></button></div><div className="tablet-live">{online ? '● Подключён' : '○ Нет связи'}</div></header>
+    <header className="tablet-header"><div><div className="tablet-brand"><span className="brand-mark">W</span><strong>Планшет водителя</strong></div><label className="vehicle-select">Погрузчик <select value={robot.id} onChange={(event) => { setTaskOpen(false); onSelect(event.target.value) }}>{robots.map((vehicle) => <option key={vehicle.id}>{vehicle.id}</option>)}</select></label><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={fleetOpen} onClick={() => setFleetOpen(value => !value)}><span>Все погрузчики</span><b>{robots.length}</b></button><button className="driver-task-trigger driver-accept-all" type="button" disabled={busy || acceptingAll || !online || !offeredRobots.length} title="Принять все назначенные задания. Забор и доставка подтверждаются отдельно." onClick={() => void acceptAllOrders()}><span>{acceptingAll ? 'Принимаем задания…' : 'Принять все задания'}</span><b>{offeredRobots.length}</b></button><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={queueOpen} onClick={() => setQueueOpen(value => !value)}><span>Очередь заказов</span><b>{orders.filter(order => !['completed', 'cancelled'].includes(order.status)).length}</b></button><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={taskOpen} onClick={() => setTaskOpen(true)}><span>Текущее задание</span><b>{order?.id ?? 'Ожидает'}</b></button></div><div className="tablet-live">{online ? '● Подключён' : '○ Нет связи'}</div></header>
     {!running && <div className="workflow-notice driver-pause-notice">Движение на паузе. Диспетчер может запустить или продолжить симуляцию. Подтверждения доступны.</div>}
     <div className="tablet-content">
       <section className="tablet-task panel" role={taskOpen ? 'dialog' : undefined} aria-hidden={!taskOpen} aria-labelledby="driver-task-title" style={taskStyle}><div className="task-kicker" onPointerDown={startTaskDrag} onPointerMove={moveTaskDrag} onPointerUp={endTaskDrag} onPointerCancel={endTaskDrag}><span id="driver-task-title">Текущее задание</span><span className={`robot-status-pill ${robot.status}`}>{robot.stopped_by_operator ? 'Остановлен' : phaseNames[robot.driver_phase]}</span>{taskOpen && <button className="driver-task-close" type="button" aria-label="Закрыть задание" onClick={() => setTaskOpen(false)}>×</button>}</div>

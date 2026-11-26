@@ -1,4 +1,5 @@
 """Ask the route agent for a connected sequence of directed aisle segments."""
+import asyncio
 from backend.harness import harness_for
 from backend.llm import consult
 from backend.traffic import permits
@@ -60,12 +61,16 @@ async def plan_routes(sim, client):
             continue
         data = {"robot": robot.id, "phase": key[1], "start": start, "goal": goal,
                 "options": {k: len(v)-1 for k, v in pieces.items()}, "connected_sequences": examples}
-        answer = await consult(client, sim, "route", data)
-        if not answer:
-            continue
+        try:
+            async with asyncio.timeout(2):
+                answer = await consult(client, sim, "route", data)
+        except TimeoutError:
+            answer = None
+        fallback = answer is None
+        selected = examples[0] if fallback else answer[0]
         path = [start]
         blocked = occupied(sim, robot) | sim.zone_agent.blocked_cells
-        for segment in answer[0]:
+        for segment in selected:
             run = pieces.get(segment)
             if not run or run[0] != path[-1]:
                 break
@@ -74,12 +79,16 @@ async def plan_routes(sim, client):
             if (sim.running and sim.dispatch_mode == "model" and sim.warehouse is layout
                     and not robot.stopped_by_operator and robot.position == start and sim.route_key(robot) == key
                     and path[-1] == goal and len(set(path)) == len(path) and not blocked.intersection(path[1:])
-                    and all(permits(layout.lanes, a, b) and (sim.roads() is None or (a, b) in sim.roads())
+                    and all(permits(layout.lanes, a, b) and (sim.roads() is None or (a, b) in sim.roads() or (a, b) in sim.detour_edges)
                             for a, b in zip(path, path[1:]))):
                 sim.model_routes[robot.id] = key, path
                 robot.route = path[1:]
                 robot.route_version += 1
-                sim._event(f"ИИ передал маршрут {robot.id}: {len(path)-1} участков по {sim.NODE_SPACING_M:g} м. {answer[1]}",
+                source = "Алгоритм (ИИ недоступен)" if fallback else "ИИ"
+                reason = "Использован проверенный сервером маршрут." if fallback else answer[1]
+                if fallback:
+                    sim.metrics["fallbacks"] += 1
+                sim._event(f"{source} передал маршрут {robot.id}: {len(path)-1} участков по {sim.NODE_SPACING_M:g} м. {reason}",
                            "robot", robot_id=robot.id)
                 harness_for(sim).resolve(answer, "Маршрут проверен и передан погрузчику")
                 changed = True
