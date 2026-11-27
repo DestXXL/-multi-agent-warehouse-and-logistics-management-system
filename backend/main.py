@@ -1,6 +1,10 @@
 """HTTP and WebSocket API for the virtual warehouse operator interface."""
 
 import asyncio
+from pathlib import Path
+from copy import deepcopy
+from dotenv import dotenv_values, load_dotenv
+from backend.scenario import generate_shift
 from typing import Literal
 
 import httpx
@@ -12,7 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from backend import dispatch
 from backend.llm import consult
-from backend.harness import Settings, harness_for
+from backend.harness import AgentHarness, Settings, harness_for
 from backend.planning import compare_shift, plan_zone, planning_pass
 from backend.route_advisor import plan_routes
 from backend.simulation import WarehouseSimulation
@@ -20,10 +24,22 @@ from backend.layout import Layout, from_warehouse
 from backend.rack_types import RACK_TYPES, generated_cargo_dimensions, pack_packages
 
 
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(ENV_FILE)
 simulation = WarehouseSimulation()
+
+
+def prepare_random_shift() -> None:
+    layout, warehouse = generate_shift()
+    simulation.custom_layout = layout
+    simulation.shift_template = (layout, warehouse)
+    simulation.reset()
+
+
+prepare_random_shift()
 harness = harness_for(simulation)
 simulation.model_available = bool(harness.key)
-simulation.dispatch_mode = "rules"
+simulation.dispatch_mode = "model" if harness.key else "rules"
 connections: set[WebSocket] = set()
 comparison_lock = asyncio.Lock()
 
@@ -143,7 +159,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Warehouse Control API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -255,10 +271,19 @@ async def compare_dispatch() -> dict:
         raise HTTPException(status_code=409, detail="Выберите деморежим или подключите модель.")
     if comparison_lock.locked():
         raise HTTPException(status_code=409, detail="Сравнение уже запущено.")
-    async with comparison_lock, model_client() as client:
-        rules, model = await asyncio.gather(compare_shift(None, "rules"), compare_shift(client, "demo" if simulation.dispatch_mode == "demo" else "model", harness))
-    await publish_state()
-    return {"rules": rules, "model": model}
+    template = simulation.shift_template
+    if template is not None and not any(order.status == "pending" for order in template[1].orders):
+        template = None
+    comparison_harness = AgentHarness()
+    comparison_harness.key = harness.key
+    comparison_harness.settings = harness.settings.model_copy()
+    mode = "demo" if simulation.dispatch_mode == "demo" else "model"
+    async with comparison_lock, comparison_harness.client() as client:
+        rules, model = await asyncio.gather(
+            compare_shift(None, "rules", template=template),
+            compare_shift(client, mode, comparison_harness, template=template),
+        )
+    return {"rules": rules, "model": model, "scenario": "shift_template" if template else "demo"}
 
 
 @app.get("/api/rack-types")
@@ -268,7 +293,14 @@ async def get_rack_types() -> dict:
 
 @app.post("/api/simulation/start")
 async def start_simulation() -> dict:
-    simulation.start(assign_orders=simulation.dispatch_mode == "rules")
+    if not harness.key:
+        key = (dotenv_values(ENV_FILE).get("LLM_API_KEY") or "").strip()
+        if key:
+            harness.key = key
+            harness.connection = "unverified"
+            simulation.model_available = True
+            simulation.dispatch_mode = "model"
+    simulation.start(automatic_handling=True, assign_orders=simulation.dispatch_mode == "rules")
     return await publish_state()
 
 
@@ -291,6 +323,12 @@ async def change_simulation_speed(request: SimulationSpeedRequest) -> dict:
 @app.post("/api/simulation/reset")
 async def reset_simulation() -> dict:
     simulation.reset()
+    return await publish_state()
+
+
+@app.post("/api/simulation/randomize")
+async def randomize_simulation() -> dict:
+    prepare_random_shift()
     return await publish_state()
 
 
@@ -502,5 +540,6 @@ async def apply_layout(layout: Layout) -> dict:
                 item.rotated = item.unit_placements[0]["rotated"]
     simulation.custom_layout = layout.model_copy(deep=True)
     simulation.reset()
+    simulation.shift_template = (simulation.custom_layout, deepcopy(simulation.warehouse))
     simulation._event("Применён макет конструктора. Добавьте заказы для точек забора и отгрузки.", "operator")
     return await publish_state()

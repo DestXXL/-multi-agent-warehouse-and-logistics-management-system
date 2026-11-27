@@ -1,5 +1,7 @@
 """Warehouse simulation coordinated by deterministic software agents."""
 
+from copy import deepcopy
+
 from collections import deque
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -27,6 +29,8 @@ class WarehouseSimulation:
         self.robot_agent = RobotAgent()
         self.zone_agent = ZoneAgent()
         self.custom_layout = None
+        self.shift_template = None
+        self.automatic_handling = False
         self.dispatch_mode = "rules"
         self.model_available = False
         self.speed = 1
@@ -34,7 +38,6 @@ class WarehouseSimulation:
         self.reset()
 
     def reset(self) -> None:
-        self.detour_edges: set[tuple[Point, Point]] = set()
         self.model_routes = {}
         prior_inventory = self.warehouse.inventory if hasattr(self, "warehouse") else []
         obstacles = [(x, y) for x in range(4, 8) for y in (1, 2, 4, 5)]
@@ -80,7 +83,9 @@ class WarehouseSimulation:
                 StockItem(id="SKU-003-A04", name="Коробка C-22", position=rack_by_id["A-04"].position, size="large", product_id="SKU-003", location_id="A-04-L01-P01", quantity=2, length_mm=400, width_mm=200, height_mm=200),
             ],
         )
-        if self.custom_layout is not None:
+        if self.shift_template is not None and self.custom_layout is self.shift_template[0]:
+            self.warehouse = deepcopy(self.shift_template[1])
+        elif self.custom_layout is not None:
             replacement = self.custom_layout.warehouse()
             location_ids = {location.id for location in replacement.storage_locations}
             replacement.inventory = [item for item in prior_inventory if item.location_id in location_ids]
@@ -99,7 +104,10 @@ class WarehouseSimulation:
         self.closure_review = False
         self.metrics = dict(distance=0, waiting=0, queue_wait=0, requests=0, tokens=0, fallbacks=0)
         self.decisions: deque[dict] = deque(maxlen=8)
-        self.next_order_number = 4
+        numbers = [identifier.split("-")[1] for identifier in
+                   [*(o.id for o in self.warehouse.orders), *(i.product_id or i.id for i in self.warehouse.inventory)]
+                   if identifier.startswith(("ORD-", "SKU-")) and identifier.split("-")[1].isdigit()]
+        self.next_order_number = max(map(int, numbers), default=0) + 1
         self.stock_movements: deque[dict] = deque(maxlen=50)
         self.events: deque[dict] = deque(maxlen=100)
         self._event("Склад подготовлен. Ожидается запуск симуляции.", "system")
@@ -246,10 +254,11 @@ class WarehouseSimulation:
             },
         }
 
-    def start(self, *, assign_orders: bool = True) -> dict:
+    def start(self, *, assign_orders: bool = True, automatic_handling: bool = False) -> dict:
         if not self.running:
+            self.automatic_handling = automatic_handling
             self.running = True
-            self._event("Симуляция запущена. Откройте планшет и примите задание.", "system")
+            self._event("Смена запущена. Примите назначенные заказы.", "system")
             if assign_orders:
                 self.assign_orders()
         return self.state()
@@ -537,6 +546,10 @@ class WarehouseSimulation:
             robot.status = "moving" if robot.route else "waiting"
 
     def driver_action(self, robot_id: str, order_id: str, action: str) -> dict:
+        self._apply_driver_action(robot_id, order_id, action)
+        return self.state()
+
+    def _apply_driver_action(self, robot_id: str, order_id: str, action: str) -> None:
         robot = self._get_robot(robot_id)
         if robot.order_id != order_id:
             raise ValueError("Задание изменилось. Обновите экран перед подтверждением")
@@ -600,8 +613,9 @@ class WarehouseSimulation:
         else:
             raise ValueError("Действие недоступно на текущем этапе задания")
         self._refresh_route(robot)
-        self._event(f"Водитель {robot.id} {message}: {order.id}.", "driver", robot_id=robot.id, order_id=order.id)
-        return self.state()
+        automatic = self.automatic_handling and action in ("pickup", "deliver")
+        actor = "Погрузчик" if automatic else "Водитель"
+        self._event(f"{actor} {robot.id} {message}: {order.id}.", "system" if automatic else "driver", robot_id=robot.id, order_id=order.id)
 
     def _current_allocation(self, order: Order) -> StockAllocation | None:
         if 0 <= order.allocation_index < len(order.allocations):
@@ -731,6 +745,9 @@ class WarehouseSimulation:
                 robot.route = []
                 if picking:
                     order.status = "picking"
+                if self.automatic_handling:
+                    self._apply_driver_action(robot.id, order.id, "pickup" if picking else "deliver")
+                    continue
                 self._event(f"{robot.id} прибыл: {self._location_address(order.storage_location_id) if picking else 'Вывоз'}. Требуется подтверждение водителя.", "system", robot_id=robot.id, order_id=order.id)
 
         if assign_orders:
@@ -887,7 +904,7 @@ class WarehouseSimulation:
         if route:
             cell = route[0]
             blocked = set(self.warehouse.obstacles) | {r.position for r in self.warehouse.racks} | self.zone_agent.blocked_cells | occupied
-            if cell not in blocked and (self.roads() is None or (robot.position, cell) in self.roads() or (robot.position, cell) in self.detour_edges) and permits(self.warehouse.lanes, robot.position, cell) and sum(abs(a-b) for a, b in zip(robot.position, cell)) == 1:
+            if cell not in blocked and (self.roads() is None or (robot.position, cell) in self.roads()) and permits(self.warehouse.lanes, robot.position, cell) and sum(abs(a-b) for a, b in zip(robot.position, cell)) == 1:
                 desired = self._heading(robot.position, cell)
                 if robot.heading != desired:
                     self._turn(robot, desired)
@@ -942,17 +959,7 @@ class WarehouseSimulation:
             lanes=self.warehouse.lanes,
             roads=self.roads(),
         )
-        route = planner(**arguments)
-        if route is not None or self.roads() is None:
-            return route
-        # Leave the road only to bypass vehicles, or to rejoin after a detour.
-        on_road = any(start == a or start == b for a, b in self.roads())
-        if on_road and (not occupied or planner(**{**arguments, "occupied": set()}) is None):
-            return None
-        route = planner(**{**arguments, "roads": None})
-        if route:
-            self.detour_edges.update(zip([start, *route], route))
-        return route
+        return planner(**arguments)
 
     def _get_robot(self, robot_id: str) -> Robot:
         for robot in self.warehouse.robots:

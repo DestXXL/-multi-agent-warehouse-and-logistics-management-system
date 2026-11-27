@@ -1,5 +1,6 @@
+import { LineIcon } from './LineIcon'
 import { metricPoint, NODE_SPACING_M } from './units'
-import { useEffect, useRef, useState, type PointerEventHandler } from 'react'
+import { useEffect, useState } from 'react'
 import type { Rack, Robot, Order } from './App'
 import { formatDimensions, formatSquareMillimeters, occupancyPercent } from './units'
 
@@ -11,17 +12,17 @@ export function ThemeToggle() {
   }, [theme])
   const isLight = theme === 'light'
   return <button className="theme-toggle" type="button" role="switch" aria-checked={isLight} aria-label={isLight ? 'Светлая тема' : 'Тёмная тема'} onClick={() => setTheme(isLight ? 'dark' : 'light')}>
-    <span className="theme-toggle-icon" aria-hidden="true">☾</span><span className="theme-toggle-track"><i /></span><span className="theme-toggle-icon" aria-hidden="true">☼</span>
+    <LineIcon kind="moon" /><span className="theme-toggle-track"><i /></span><LineIcon kind="sun" />
   </button>
 }
 
 export function Navigation({ screen, onChange }: { screen: 'control' | 'driver' | 'layout'; onChange: (screen: 'control' | 'driver') => void }) {
   return <nav className="app-navigation" aria-label="Основная навигация">
-    <div className="nav-brand" aria-hidden="true">W<span>CC</span></div>
-    <button type="button" className={screen === 'control' ? 'active' : ''} aria-current={screen === 'control' ? 'page' : undefined} aria-label="Диспетчерская" onClick={() => onChange('control')}><NavIcon kind="map" /><span>Диспетчерская</span></button>
-    <button type="button" className={screen === 'driver' ? 'active' : ''} aria-current={screen === 'driver' ? 'page' : undefined} aria-label="Планшет водителя" onClick={() => onChange('driver')}><NavIcon kind="tablet" /><span>Планшет водителя</span></button>
-    <a href="?view=layout" aria-label="Конструктор" className={screen === 'layout' ? 'active' : ''} aria-current={screen === 'layout' ? 'page' : undefined}><NavIcon kind="layout" /><span>Конструктор</span></a>
-    <div className="nav-footer">Модель склада<span>Локальная симуляция</span></div>
+    <div className="nav-brand" aria-hidden="true">WCC</div>
+    <button type="button" className={screen === 'control' ? 'active' : ''} aria-current={screen === 'control' ? 'page' : undefined} aria-label="Диспетчерская" title="Диспетчерская" onClick={() => onChange('control')}><NavIcon kind="map" /><span>Диспетчерская</span></button>
+    <button type="button" className={screen === 'driver' ? 'active' : ''} aria-current={screen === 'driver' ? 'page' : undefined} aria-label="Планшет водителя" title="Планшет водителя" onClick={() => onChange('driver')}><NavIcon kind="tablet" /><span>Планшет водителя</span></button>
+    <a href="?view=layout" aria-label="Конструктор" title="Конструктор" className={screen === 'layout' ? 'active' : ''} aria-current={screen === 'layout' ? 'page' : undefined}><NavIcon kind="layout" /><span>Конструктор</span></a>
+    <div className="nav-footer">Локальная симуляция</div>
   </nav>
 }
 
@@ -29,14 +30,9 @@ function NavIcon({ kind }: { kind: 'map' | 'tablet' | 'layout' }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">{kind === 'map' ? <><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4M7 8h4v5H7zM15 8h2M15 12h2" /></> : kind === 'tablet' ? <><rect x="5" y="2" width="14" height="20" rx="2" /><path d="M9 6h6M11 18h2" /></> : <><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></>}</svg>
 }
 
-export function ObjectInspector({ rack, robot, order, phase, status, isOpen, onClose, onRackDetails, onDragStart, onDragMove, onDragEnd }: { rack?: Rack; robot?: Robot; order?: Order; phase?: string; status?: string; isOpen: boolean; onClose: () => void; onRackDetails: () => void; onDragStart?: PointerEventHandler<HTMLDivElement>; onDragMove?: PointerEventHandler<HTMLDivElement>; onDragEnd?: PointerEventHandler<HTMLDivElement> }) {
-  const panel = useRef<HTMLElement>(null)
-  const selection = rack?.id ?? robot?.id ?? order?.id
-  useEffect(() => {
-    if (selection) panel.current?.scrollIntoView({ block: 'nearest' })
-  }, [selection])
-  return <section ref={panel} className={`panel object-inspector ${(rack || robot || order) ? 'has-selection' : ''}`} role={isOpen && selection ? 'dialog' : undefined} aria-hidden={!isOpen} aria-label="Выбранный объект">
-    <div className="inspector-heading" onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd} onPointerCancel={onDragEnd}><div><span className="inspector-type">{rack ? 'Стеллаж' : robot ? 'Погрузчик' : order ? 'Заказ' : 'Контекст объекта'}</span><h2>{rack?.id ?? robot?.id ?? order?.id ?? 'Выберите объект'}</h2></div>{(rack || robot || order) && <button className="icon-button" aria-label="Закрыть окно объекта" onClick={onClose}>×</button>}</div>
+export function ObjectInspector({ busy, onAccept, rack, robot, order, phase, status, isOpen, onClose, onRackDetails }: { busy: boolean; onAccept: (robot: Robot) => void; rack?: Rack; robot?: Robot; order?: Order; phase?: string; status?: string; isOpen: boolean; onClose: () => void; onRackDetails: () => void }) {
+  return <section className={`panel object-inspector ${(rack || robot || order) ? 'has-selection' : ''}`} data-docked="" aria-hidden={!isOpen} aria-label="Выбранный объект">
+    <div className="inspector-heading"><div><span className="inspector-type">{rack ? 'Стеллаж' : robot ? 'Погрузчик' : order ? 'Заказ' : 'Контекст объекта'}</span><h2>{rack?.id ?? robot?.id ?? order?.id ?? 'Выберите объект'}</h2></div>{(rack || robot || order) && <button className="icon-button" aria-label="Закрыть окно объекта" onClick={onClose}>×</button>}</div>
     {rack ? <>
       <div className="rack-elevation" role="img" aria-label={`Фасад стеллажа: ${rack.levels} ярусов, ${formatDimensions(rack.width_mm, rack.depth_mm, rack.height_mm)}`}>
         <svg viewBox={`0 0 ${rack.width_mm + 120} ${rack.height_mm + 120}`} preserveAspectRatio="xMidYMid meet">
@@ -51,6 +47,7 @@ export function ObjectInspector({ rack, robot, order, phase, status, isOpen, onC
     </> : robot ? <>
       <div className={`inspector-status ${robot.status}`}>{phase}</div>
       <dl className="inspector-specs"><dt>Позиция</dt><dd>{metricPoint(robot.position_m ?? robot.position, !!robot.position_m)}</dd><dt>Задание</dt><dd>{robot.order_id ?? 'Нет задания'}</dd><dt>Осталось пройти</dt><dd>{robot.route_remaining_m ?? robot.route.length * NODE_SPACING_M} м</dd><dt>Версия маршрута</dt><dd>{robot.route_version}</dd><dt>Груз</dt><dd>{robot.carrying_item ? 'На борту' : 'Пусто'}</dd></dl>
+      {robot.driver_phase === 'offered' && <button className="primary-button" disabled={busy || robot.stopped_by_operator} onClick={() => onAccept(robot)}>Принять заказ {robot.order_id}</button>}
       {robot.route.length > 0 && <p className="inspector-note">Маршрут выделен на карте. Цель: {metricPoint(robot.route[robot.route.length - 1])}.</p>}
       <a className="primary-button" href={`?view=driver&vehicle=${encodeURIComponent(robot.id)}`}>Открыть планшет водителя ↗</a>
     </> : order ? <>

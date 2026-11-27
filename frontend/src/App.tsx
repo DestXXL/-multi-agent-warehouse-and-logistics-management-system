@@ -1,9 +1,9 @@
+import { LineIcon } from './LineIcon'
 import { metricPoint, NODE_SPACING_M } from './units'
 import { serverUrl as API } from './server'
 import DriverQueue from './DriverQueue'
 import InventoryBook, { type Movement } from './InventoryBook'
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import WarehouseScene from './WarehouseScene'
 import DispatchPanel, { type DispatchState } from './DispatchPanel'
 import { Navigation, ObjectInspector, ThemeToggle } from './ControlCenter'
@@ -77,9 +77,35 @@ type EventItem = {
   message: string
 }
 
-type ToastItem = { id: string; source: string; message: string }
 type OrderStatusFilter = 'all' | Order['status']
-type DashboardPanel = 'orders' | 'fleet' | 'inventory' | 'control' | 'agents' | 'activity' | 'object'
+const panelNames = {
+  offers: 'Заказы к принятию', fleet: 'Парк техники', activity: 'Журнал событий',
+  orders: 'Очередь заказов', inventory: 'Позиции склада', control: 'Управление сменой',
+  agents: 'ИИ и агенты', object: 'Выбранный объект',
+} as const
+type DashboardPanel = keyof typeof panelNames
+const defaultPanelOrder = Object.keys(panelNames) as DashboardPanel[]
+
+function readOpenPanels(): DashboardPanel[] {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem('warehouse-open-panels') ?? 'null')
+    if (Array.isArray(saved)) {
+      return saved.filter((key): key is DashboardPanel => key !== 'object' && defaultPanelOrder.includes(key))
+    }
+  } catch { /* Use the default when storage is unavailable. */ }
+  return ['offers', 'fleet', 'activity']
+}
+
+function readPanelOrder() {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem('warehouse-panel-order') ?? 'null')
+    if (Array.isArray(saved)) {
+      const known = saved.filter((key): key is DashboardPanel => defaultPanelOrder.includes(key))
+      return [...new Set([...known, ...defaultPanelOrder])]
+    }
+  } catch { /* Use the default when storage is unavailable. */ }
+  return defaultPanelOrder
+}
 type PhysicalScale = { cellStepM: number; forkliftLengthM: number; forkliftWidthM: number }
 
 const DEFAULT_PHYSICAL_SCALE: PhysicalScale = { cellStepM: 3, forkliftLengthM: 2.4, forkliftWidthM: 1.1 }
@@ -145,7 +171,6 @@ function key([x, y]: [number, number]) {
 }
 
 function App() {
-  const [openDriverTask] = useState(() => new URLSearchParams(window.location.search).get('task') === 'open')
   const [stockQuery, setStockQuery] = useState('')
   const [stockFilter, setStockFilter] = useState('all')
   const [state, setState] = useState<State | null>(null)
@@ -155,9 +180,12 @@ function App() {
   const [selectedRackId, setSelectedRackId] = useState<string | null>(null)
   const [detailRackId, setDetailRackId] = useState<string | null>(null)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
-  const [activePanel, setActivePanel] = useState<DashboardPanel | null>(null)
-  const [panelOffset, setPanelOffset] = useState({ x: 0, y: 0 })
-  const panelDrag = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
+  const panelRail = useRef<HTMLDivElement>(null)
+  const draggedPanel = useRef<DashboardPanel | null>(null)
+  const [dropTarget, setDropTarget] = useState<DashboardPanel | null>(null)
+  const [panelOrder, setPanelOrder] = useState(readPanelOrder)
+  const [openPanels, setOpenPanels] = useState(readOpenPanels)
+  const [revealPanel, setRevealPanel] = useState<DashboardPanel | null>(null)
   const [eventSource, setEventSource] = useState('all')
   const [orderQuery, setOrderQuery] = useState('')
   const [orderStatusFilter, setOrderStatusFilter] = useState<OrderStatusFilter>('all')
@@ -167,18 +195,32 @@ function App() {
     const saved = readPhysicalScale()
     return { cellStepM: String(saved.cellStepM), forkliftLengthM: String(saved.forkliftLengthM), forkliftWidthM: String(saved.forkliftWidthM) }
   })
-  const [toasts, setToasts] = useState<ToastItem[]>([])
-  const seenEventIds = useRef<Set<string> | null>(null)
-  const toastTimers = useRef<Set<number>>(new Set())
   const [screen, setScreen] = useState<'control' | 'driver'>(() => new URLSearchParams(window.location.search).get('view') === 'driver' ? 'driver' : 'control')
   const [driverId, setDriverId] = useState(() => new URLSearchParams(window.location.search).get('vehicle') || 'R-01')
   useEffect(() => {
-    if (!activePanel) return
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setActivePanel(null) }
+    try { localStorage.setItem('warehouse-panel-order', JSON.stringify(panelOrder)) } catch { /* Browser storage is optional. */ }
+  }, [panelOrder])
+  useEffect(() => {
+    try {
+      localStorage.setItem('warehouse-open-panels', JSON.stringify(openPanels.filter(key => key !== 'object')))
+    } catch { /* Browser storage is optional. */ }
+  }, [openPanels])
+  useEffect(() => {
+    if (!revealPanel || screen !== 'control') return
+    const heading = panelRail.current?.querySelector<HTMLElement>(`[data-window="${revealPanel}"] .dock-window-tools`)
+    const rail = panelRail.current?.parentElement
+    if (heading && rail && window.innerWidth > 1050) {
+      const offset = heading.getBoundingClientRect().top - rail.getBoundingClientRect().top
+      if (offset < 0 || offset > rail.clientHeight - 120) rail.scrollTop += offset
+    } else heading?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    setRevealPanel(null)
+  }, [revealPanel, screen])
+  useEffect(() => {
+    if (screen !== 'driver' || !detailRackId) return
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setDetailRackId(null) }
     window.addEventListener('keydown', closeOnEscape)
-    return () => { window.removeEventListener('keydown', closeOnEscape) }
-  }, [activePanel])
-  useEffect(() => { setPanelOffset({ x: 0, y: 0 }); panelDrag.current = null }, [activePanel])
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [detailRackId, screen])
   useEffect(() => {
     const url = new URL(window.location.href)
     url.searchParams.set('view', screen)
@@ -234,27 +276,6 @@ function App() {
   useEffect(() => {
     try { localStorage.setItem('warehouse-visual-scale', JSON.stringify(physicalScale)) } catch { /* Browser storage is optional. */ }
   }, [physicalScale])
-  useEffect(() => () => toastTimers.current.forEach(timer => window.clearTimeout(timer)), [])
-  useEffect(() => {
-    if (!state) return
-    const eventIds = new Set(state.events.map(event => event.id))
-    if (seenEventIds.current === null) {
-      seenEventIds.current = eventIds
-      return
-    }
-    const freshEvents = state.events.filter(event => !seenEventIds.current?.has(event.id)).slice(0, 3)
-    seenEventIds.current = eventIds
-    if (!freshEvents.length) return
-    const nextToasts = freshEvents.slice().reverse().map(event => ({ id: event.id, source: event.source, message: event.message }))
-    setToasts(current => [...nextToasts, ...current].slice(0, 4))
-    nextToasts.forEach(toast => {
-      const timer = window.setTimeout(() => {
-        setToasts(current => current.filter(item => item.id !== toast.id))
-        toastTimers.current.delete(timer)
-      }, 5000)
-      toastTimers.current.add(timer)
-    })
-  }, [state?.events])
   const robots = warehouse?.robots ?? []
   const orders = warehouse?.orders ?? []
   const inventory = warehouse?.inventory ?? []
@@ -290,7 +311,7 @@ function App() {
     setHighlightedRobotId(robotId)
     setSelectedRackId(null)
     setSelectedOrderId(null)
-    setActivePanel(null)
+    closePanel('object')
     window.requestAnimationFrame(() => document.getElementById('warehouse-map-panel')?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' }))
   }
 
@@ -320,6 +341,14 @@ function App() {
         throw new Error(problem.detail || 'Команда не выполнена.')
       }
       setState((await response.json()) as State)
+      if (path === '/api/simulation/start' || path === '/api/simulation/randomize' || path === '/api/simulation/reset') {
+        closePanel('object')
+        setOpenPanels(current => current.includes('offers') ? current : [...current, 'offers'])
+        setDetailRackId(null)
+        setSelectedOrderId(null)
+        setSelectedRackId(null)
+        setHighlightedRobotId(null)
+      }
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : 'Не удалось связаться с сервером.')
     } finally {
@@ -334,7 +363,7 @@ function App() {
         <div className="brand-mark">W</div>
         <h1>Подключаем склад</h1>
         <p className="muted">{error || 'Получаем состояние симуляции…'}</p>
-        <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">Открыть API сервера ↗</a>
+        <a href={`${API}/docs`} target="_blank" rel="noreferrer">Открыть API сервера ↗</a>
       </main>
     )
   }
@@ -343,122 +372,75 @@ function App() {
   const detailRackData = warehouse?.racks.find(rack => rack.id === detailRackId)
   const selectedRobot = robots.find(robot => robot.id === highlightedRobotId)
   const selectedOrder = orders.find(order => order.id === selectedOrderId)
-  const selectRack = (id: string) => { setSelectedRackId(id); setHighlightedRobotId(null); setSelectedOrderId(null); setActivePanel('object') }
-  const selectRobot = (id: string) => { setHighlightedRobotId(id); setSelectedRackId(null); setSelectedOrderId(null); setActivePanel('object') }
+  const selectRack = (id: string) => { setDetailRackId(null); setSelectedRackId(id); setHighlightedRobotId(null); setSelectedOrderId(null); openPanel('object') }
+  const selectRobot = (id: string) => { setDetailRackId(null); setHighlightedRobotId(id); setSelectedRackId(null); setSelectedOrderId(null); openPanel('object') }
   const visibleEvents = state.events.filter(event => eventSource === 'all' || event.source === eventSource)
-  const togglePanel = (panel: DashboardPanel) => setActivePanel(current => current === panel ? null : panel)
-  const startPanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!activePanel || event.button !== 0 || (event.target as HTMLElement).closest('button')) return
-    panelDrag.current = { x: event.clientX, y: event.clientY, offsetX: panelOffset.x, offsetY: panelOffset.y }
-    event.currentTarget.setPointerCapture(event.pointerId)
+  function openPanel(panel: DashboardPanel) {
+    setOpenPanels(current => current.includes(panel) ? current : [...current, panel])
+    setRevealPanel(panel)
   }
-  const movePanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!panelDrag.current) return
-    const nextX = panelDrag.current.offsetX + event.clientX - panelDrag.current.x
-    const nextY = panelDrag.current.offsetY + event.clientY - panelDrag.current.y
-    const maxX = Math.max(0, window.innerWidth / 2 - 120)
-    const maxY = Math.max(0, window.innerHeight / 2 - 80)
-    setPanelOffset({ x: Math.max(-maxX, Math.min(maxX, nextX)), y: Math.max(-maxY, Math.min(maxY, nextY)) })
+  function closePanel(panel: DashboardPanel) {
+    setOpenPanels(current => current.filter(key => key !== panel))
+    if (panel === 'object') setDetailRackId(null)
   }
-  const endPanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    panelDrag.current = null
+  function togglePanel(panel: DashboardPanel) {
+    if (openPanels.includes(panel)) closePanel(panel)
+    else openPanel(panel)
   }
-  const panelStyle = { '--panel-drag-x': `${panelOffset.x}px`, '--panel-drag-y': `${panelOffset.y}px` } as CSSProperties
-  return (
-    <div className={`app-shell ${activePanel ? `dialog-${activePanel}` : ''}`} style={panelStyle}>
-
-      {detailRackData && createPortal(<RackDetails key={detailRackData.id} rack={detailRackData} locations={warehouse!.storage_locations.filter(location => location.rack_id === detailRackData.id)} onClose={() => setDetailRackId(null)} />, document.body)}
-      {activePanel && createPortal(<div className="module-dialog-backdrop" aria-hidden="true" onMouseDown={event => { if (event.target === event.currentTarget) setActivePanel(null) }} />, document.body)}
-
-      {toasts.length > 0 && <div className="toast-stack" role="status" aria-live="polite">{toasts.map(toast => <div className="event-toast" key={toast.id}><span className={`toast-source ${toast.source}`} /><p>{toast.message}</p><button type="button" aria-label="Закрыть уведомление" onClick={() => setToasts(current => current.filter(item => item.id !== toast.id))}>×</button></div>)}</div>}
-      <header className="topbar">
-        <div className="brand-lockup"><div className="brand-mark">W</div><div><strong>Центр управления складом</strong></div></div>
-        <div className="topbar-center"><span className={`connection-dot ${connection}`} />{connection === 'online' ? 'На связи' : 'Нет связи'}</div>
-        <Navigation screen={screen} onChange={nextScreen => { setActivePanel(null); setScreen(nextScreen) }} /><div className="topbar-right"><ThemeToggle /><button type="button" className="simulation-speed" disabled={busy || connection !== 'online'} title="Ускорение времени симуляции: ×1, ×2, ×5, ×10. Подтверждения водителя сохраняются." aria-label={`Скорость симуляции ×${state.speed ?? 1}. Нажмите для переключения`} onClick={() => { const speeds = [1, 2, 5, 10]; void command('/api/simulation/speed', { speed: speeds[(speeds.indexOf(state.speed ?? 1) + 1) % speeds.length] }) }}>⏩ ×{state.speed ?? 1}</button><span className={`simulation-badge ${state.running ? 'is-running' : ''}`}><span />{state.running ? 'Симуляция активна' : 'На паузе'}</span><button className="header-start" disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Приостановить' : 'Запустить'}</button>{screen === 'driver' && <span className="live-clock">Такт · {state.tick}</span>}</div>
-      </header>
-
-      <main className={`workspace ${screen === 'driver' ? 'driver-workspace' : ''}`}>
-        {error && <div className="workflow-error" role="alert">{error}</div>}
-        {connection === 'offline' && <div className="workflow-error" role="status">Связь потеряна. Показано последнее известное состояние; команды недоступны.</div>}
-        {screen === 'driver' ? (
-          driverRobot ? <DriverTablet orders={orders} initialTaskOpen={openDriverTask} robot={driverRobot} robots={robots} order={driverOrder} cells={<WarehouseScene running={state.running} simulationSpeed={state.speed ?? 1} warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={driverRobot.id} target={driverOrder ? (['offered', 'to_pickup', 'confirm_pickup'].includes(driverRobot.driver_phase) ? driverOrder.pickup : driverOrder.dropoff) : driverRobot.driver_phase === 'returning' ? driverRobot.home : null} onRack={id => setDetailRackId(id)} onRobot={setDriverId} />} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
-        ) : <>
-        <section className="main-column">
-          <div className="page-heading">
-            <div><h1>Диспетчерская</h1><p className="muted">{warehouse!.racks.length} стеллажей · ≈ { (warehouse!.width * physicalScale.cellStepM).toLocaleString("ru") } × { (warehouse!.height * physicalScale.cellStepM).toLocaleString("ru") } м</p></div>
-          </div>
-
-          <div className="metric-row">
-            <Metric label="В движении" value={`${activeRobots} / ${robots.length}`} />
-            <Metric label="Открытые заказы" value={String(pending)} />
-            <Metric label="Выполнено за смену" value={String(completed)} />
-            <Metric label="Такт симуляции" value={String(state.tick)} />
-          </div>
-
-          {state.dispatch?.decisions[0] && <section className="panel latest-decision" aria-live="polite">
-            <div><strong>Последнее решение · {state.dispatch.decisions[0].source === 'demo' ? 'демонстрация без LLM' : state.dispatch.decisions[0].source === 'model' ? 'ИИ' : state.dispatch.decisions[0].source === 'fallback' ? 'резервные правила' : 'правила'}</strong>
-              <p>{state.dispatch.decisions[0].source === 'model' && state.dispatch.decisions[0].batches
-                ? `ИИ выбрал ${state.dispatch.decisions[0].selected_batch}. Факты маршрута и оценки рассчитаны сервером.`
-                : state.dispatch.decisions[0].reason}</p>
-              {state.dispatch.decisions[0].selected.map(key => {
-                const facts = state.dispatch!.decisions[0].options[key]
-                return <p className="decision-evidence" key={key}><b>{key}</b> · {summarizeDecisionFacts(facts)}</p>
-              })}
-            </div>
-            <button type="button" onClick={() => setActivePanel('agents')}>Все варианты</button>
-          </section>}
-
-          <nav className="module-launcher" aria-label="Дополнительные панели склада">
-            <span className="module-launcher-label">РАЗДЕЛЫ</span>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'orders'} onClick={() => togglePanel('orders')}><i>↗</i>Заказы<b>{pending}</b></button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'fleet'} onClick={() => togglePanel('fleet')}><i>✣</i>Техника<b>{robots.length}</b></button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'inventory'} onClick={() => togglePanel('inventory')}><i>▧</i>Запасы<b>{inventory.length}</b></button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'control'} onClick={() => togglePanel('control')}><i>▶</i>Управление</button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'agents'} onClick={() => togglePanel('agents')}><i>◎</i>ИИ и агенты</button>
-            <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'activity'} onClick={() => togglePanel('activity')}><i>≋</i>События<b>{visibleEvents.length}</b></button>
-            {selectedRackData || selectedRobot || selectedOrder ? <button type="button" aria-haspopup="dialog" aria-expanded={activePanel === 'object'} onClick={() => togglePanel('object')}><i>⌕</i>Выбранный объект</button> : null}
-          </nav>
-
-          <section className="panel map-panel" id="warehouse-map-panel">
-            <div className="panel-heading map-heading">
-              <h2>Карта склада</h2>
-              <div className="map-actions"><span className="map-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
-            </div>
-            <ShiftAttention robots={robots} closures={warehouse!.closed_cells} online={connection === 'online'}
-              running={state.running} onVehicle={selectRobot} onClosures={() => setActivePanel('control')} />
-            <details className="scale-settings"><summary>Масштаб и габариты техники</summary><div className="map-dimension-controls"><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div></details>
-            <div className="map-legend"><span><i className="legend-dot robot-dot" /> Погрузчик</span><span><i className="legend-box rack-dot" /> Стеллаж</span><span><i className="legend-box shipping-dot" /> Отгрузка</span><span><i className="legend-box route-dot" /> {highlightedRobotId ? `Маршрут ${highlightedRobotId}` : 'Маршрут по выбору'}</span><span><i className="legend-box aisle-dot" /> Проезд · м</span><span className="aisle-warning-legend">Красный – уже погрузчика</span>{highlightedRobotId && <button className="clear-route-button" type="button" onClick={() => setHighlightedRobotId(null)}>Снять выделение</button>}</div>
-            <WarehouseScene running={state.running} simulationSpeed={state.speed ?? 1} warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={highlightedRobotId} onRack={selectRack} onRobot={selectRobot} />
-          </section>
-
-          <ObjectInspector rack={selectedRackData} robot={selectedOrder ? undefined : selectedRobot} order={selectedOrder} phase={selectedRobot ? phaseNames[selectedRobot.driver_phase] : undefined} status={selectedOrder ? orderNames[selectedOrder.status] : undefined} isOpen={activePanel === 'object'} onDragStart={startPanelDrag} onDragMove={movePanelDrag} onDragEnd={endPanelDrag} onClose={() => { setSelectedRackId(null); setHighlightedRobotId(null); setSelectedOrderId(null); setActivePanel(null) }} onRackDetails={() => { setDetailRackId(selectedRackId); setActivePanel(null) }} />
-          <div className="lower-grid">
-            <section className="panel orders-panel" id="orders" role={activePanel === 'orders' ? 'dialog' : undefined} aria-hidden={activePanel !== 'orders'} aria-labelledby="orders-panel-title">
-              <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="orders-panel-title">Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
+  function movePanel(from: DashboardPanel, to: DashboardPanel) {
+    if (from === to) return
+    setPanelOrder(current => {
+      const next = current.filter(key => key !== from)
+      next.splice(current.indexOf(to), 0, from)
+      return next
+    })
+  }
+  const offers = robots.filter(r => r.driver_phase === 'offered' && !r.stopped_by_operator)
+  const focusVehicle = highlightedRobotId ?? robots.find(r => r.order_id && r.driver_phase !== 'offered')?.id ?? robots[0]?.id
+  const gateName = (point: [number, number]) => {
+    const gate = warehouse!.shipping_points.findIndex(p => p[0] === point[0] && p[1] === point[1])
+    return gate < 0 ? metricPoint(point) : `Ворота ${gate + 1}`
+  }
+  const rackDetails = detailRackData && <RackDetails key={detailRackData.id} rack={detailRackData}
+    locations={warehouse!.storage_locations.filter(location => location.rack_id === detailRackData.id)}
+    onClose={() => setDetailRackId(null)} />
+  const offerWindow = <OfferWindow gateName={gateName} offers={offers} orders={orders}
+    busy={busy || connection !== 'online'} running={state.running}
+    close={() => closePanel('offers')}
+    accept={robot => void command(`/api/robots/${robot.id}/driver-action`, { action: 'accept', order_id: robot.order_id })} />
+  function replaceShift(randomize: boolean) {
+    if ((state!.running || state!.tick > 0) && !window.confirm('Завершить текущую смену и начать заново?')) return
+    void command(randomize ? '/api/simulation/randomize' : '/api/simulation/reset')
+  }
+  const visiblePanels = panelOrder.filter(panel => openPanels.includes(panel) &&
+    (panel !== 'object' || selectedRackData || selectedRobot || selectedOrder))
+  const panelContent: Record<DashboardPanel, React.ReactNode> = {
+    offers: offerWindow,
+    object: rackDetails || <ObjectInspector busy={busy || connection !== 'online'} onAccept={robot => void command(`/api/robots/${robot.id}/driver-action`, { order_id: robot.order_id, action: 'accept' })} rack={selectedRackData} robot={selectedOrder ? undefined : selectedRobot} order={selectedOrder} phase={selectedRobot ? phaseNames[selectedRobot.driver_phase] : undefined} status={selectedOrder ? orderNames[selectedOrder.status] : undefined} isOpen onClose={() => { setSelectedRackId(null); setHighlightedRobotId(null); setSelectedOrderId(null); closePanel('object') }} onRackDetails={() => setDetailRackId(selectedRackId)} />,
+    orders: <section className="panel orders-panel" id="orders" data-docked="" aria-labelledby="orders-panel-title">
+              <div className="panel-heading compact-heading"><div><h2 id="orders-panel-title">Очередь заказов</h2></div><span className="count-pill">{filteredOrders.length} / {orders.length}</span><button type="button" className="panel-window-close" aria-label="Закрыть панель" onClick={() => closePanel('orders')}>×</button></div>
               <div className="order-tools"><div className="order-search"><input value={orderQuery} onChange={event => setOrderQuery(event.target.value)} placeholder="Заказ или товар" aria-label="Поиск заказов" /><button type="button" aria-label="Очистить поиск" onClick={() => setOrderQuery('')} disabled={!orderQuery}>×</button></div><label className="order-filter"><span>Статус</span><select value={orderStatusFilter} onChange={event => setOrderStatusFilter(event.target.value as OrderStatusFilter)} aria-label="Фильтр по статусу"><option value="all">Все</option>{Object.entries(orderNames).map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select></label></div>
               <div className="order-list">
-                {filteredOrders.map((order) => <OrderRow key={order.id} order={order} highlightedRobotId={highlightedRobotId} onShowRoute={showOrderRoute} onSelect={() => { setSelectedOrderId(order.id); setSelectedRackId(null); setHighlightedRobotId(order.robot_id); setActivePanel('object') }} />)}
+                {filteredOrders.map((order) => <OrderRow key={order.id} order={order} highlightedRobotId={highlightedRobotId} onShowRoute={showOrderRoute} onSelect={() => { setDetailRackId(null); setSelectedOrderId(order.id); setSelectedRackId(null); setHighlightedRobotId(order.robot_id); openPanel('object') }} />)}
                 {filteredOrders.length === 0 && <div className="order-empty">Заказы по этому запросу не найдены.</div>}
               </div>
-            </section>
-          <section className="panel activity-panel" role={activePanel === 'activity' ? 'dialog' : undefined} aria-hidden={activePanel !== 'activity'} aria-labelledby="activity-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="activity-panel-title">Журнал событий</h2></div><span className="activity-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
+            </section>,
+    activity: <section className="panel activity-panel" data-docked="" aria-labelledby="activity-panel-title">
+            <div className="panel-heading compact-heading"><div><h2 id="activity-panel-title">Журнал событий</h2></div><span className="activity-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span><button type="button" className="panel-window-close" aria-label="Закрыть панель" onClick={() => closePanel('activity')}>×</button></div>
             <label className="event-filter">Источник <select value={eventSource} onChange={event => setEventSource(event.target.value)}><option value="all">Все события</option>{Object.entries(sourceNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
             <div className="event-list">
               {visibleEvents.slice(0, 30).map((event, index) => <div className="event-row" key={event.id}><div className={`event-line ${event.source}`}><i /></div><div className="event-copy"><div><span className={`source-label ${event.source}`}>{sourceNames[event.source] ?? event.source}</span><time>{new Date(event.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time></div><p>{event.message}</p></div>{index === 0 && state.running && <span className="new-event">Сейчас</span>}</div>)}
             </div>
             <div className="all-events">Показано {Math.min(30, visibleEvents.length)} из {visibleEvents.length} событий</div>
-          </section>
-            <section className="panel fleet-panel" role={activePanel === 'fleet' ? 'dialog' : undefined} aria-hidden={activePanel !== 'fleet'} aria-labelledby="fleet-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="fleet-panel-title">Парк техники</h2></div><span className="fleet-count">{robots.length} ЕД.</span><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
+          </section>,
+    fleet: <section className="panel fleet-panel" data-docked="" aria-labelledby="fleet-panel-title">
+            <div className="panel-heading compact-heading"><div><h2 id="fleet-panel-title">Парк техники</h2></div><span className="fleet-count">{robots.length} ед.</span><button type="button" className="panel-window-close" aria-label="Закрыть панель" onClick={() => closePanel('fleet')}>×</button></div>
               <div className="fleet-list">
                 {robots.map((robot) => <div className={`fleet-row ${highlightedRobotId === robot.id ? 'is-selected' : ''}`} key={robot.id}><div className="fleet-info"><strong>{robot.id}<small>{phaseNames[robot.driver_phase]}</small></strong><span>{robot.order_id ? `Задание ${robot.order_id}` : 'Нет активного задания'}</span></div><button type="button" className="fleet-map-button" aria-pressed={highlightedRobotId === robot.id} onClick={() => selectRobot(robot.id)}>{highlightedRobotId === robot.id ? 'На карте ✓' : 'Показать'}</button><a className="driver-link" href={`?view=driver&vehicle=${robot.id}`} target="_blank" rel="noreferrer">Планшет ↗</a><button className="stop-button" aria-label={`${robot.status === 'stopped' ? 'Продолжить' : 'Остановить'} ${robot.id}`} disabled={busy || connection !== 'online'} onClick={() => command(`/api/robots/${robot.id}/${robot.status === 'stopped' ? 'resume' : 'stop'}`)}>{robot.status === 'stopped' ? '▶' : 'Ⅱ'}</button></div>)}
               </div>
-            </section>
-          </div>
-          <section className="panel inventory-panel" role={activePanel === 'inventory' ? 'dialog' : undefined} aria-hidden={activePanel !== 'inventory'} aria-labelledby="inventory-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="inventory-panel-title">Позиции склада</h2></div><span className="count-pill">{inventory.length} ПОЗИЦИИ</span><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
+            </section>,
+    inventory: <section className="panel inventory-panel" data-docked="" aria-labelledby="inventory-panel-title">
+            <div className="panel-heading compact-heading"><div><h2 id="inventory-panel-title">Позиции склада</h2></div><span className="count-pill">{formatCount(inventory.length, 'позиция', 'позиции', 'позиций')}</span><button type="button" className="panel-window-close" aria-label="Закрыть панель" onClick={() => closePanel('inventory')}>×</button></div>
             <div className="stock-tools">
               <p>На складе <b>{stockTotal}</b> · В резерве <b>{reservedTotal}</b> · Доступно <b>{stockTotal - reservedTotal}</b></p>
               <input type="search" aria-label="Поиск по запасам" placeholder="Название, код товара или адрес" value={stockQuery} onChange={event => setStockQuery(event.target.value)} />
@@ -475,30 +457,133 @@ function App() {
               {!visibleStock.length && <p>{inventory.length ? 'По выбранным условиям позиций нет.' : 'На складе пока нет товаров.'}</p>}
             </div>
             <InventoryBook<State> rows={stockRows} movements={state.stock_movements ?? []} api={API} online={connection === 'online'} refresh={setState} />
-          </section>
-        </section>
-
-        <aside className="side-column">
-
-          <section className="panel control-panel" role={activePanel === 'control' ? 'dialog' : undefined} aria-hidden={activePanel !== 'control'} aria-labelledby="control-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="control-panel-title">Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
-            <p className="control-copy">{state.running ? 'Откройте планшет водителя: примите задание, подтвердите забор и доставку. Движение моделируется автоматически.' : 'Запустите симуляцию, чтобы начать складскую операцию.'}</p>
+          </section>,
+    control: <section className="panel control-panel" data-docked="" aria-labelledby="control-panel-title">
+            <div className="panel-heading compact-heading"><div><h2 id="control-panel-title">Управление сменой</h2></div><span className={`status-ring ${state.running ? 'active' : ''}`} /><button type="button" className="panel-window-close" aria-label="Закрыть панель" onClick={() => closePanel('control')}>×</button></div>
+            <p className="control-copy">{state.running ? 'Примите назначенный заказ. Погрузчик сам заберёт товар и отвезёт его к отгрузке.' : 'Запустите симуляцию, чтобы начать складскую операцию.'}</p>
             <button className={`primary-button ${state.running ? 'pause-action' : ''}`} disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Приостановить' : 'Начать симуляцию'}</button>
             <button className="congestion-button" disabled={busy || connection !== 'online' || !state.can_create_congestion} onClick={() => command('/api/simulation/congestion')}>Смоделировать затор</button>
-            <button className="secondary-button" disabled={busy || connection !== 'online'} onClick={() => { if (window.confirm('Начать заново? Задания, подтверждения и журнал текущей демонстрации будут сброшены.')) void command('/api/simulation/reset') }}>Сбросить склад</button>
+            <button className="secondary-button" disabled={busy || connection !== 'online'} onClick={() => replaceShift(false)}>Сбросить смену</button>
             <button className="secondary-button" disabled={busy || connection !== 'online' || !warehouse!.closed_cells.length} onClick={() => command('/api/aisles/reopen')}>Открыть проходы ({warehouse!.closed_cells.length})</button>
-          </section>
-
-          <section className="panel agent-panel" role={activePanel === 'agents' ? 'dialog' : undefined} aria-hidden={activePanel !== 'agents'} aria-labelledby="agents-panel-title">
-            <div className="panel-heading compact-heading" onPointerDown={startPanelDrag} onPointerMove={movePanelDrag} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}><div><h2 id="agents-panel-title">ИИ и агенты</h2></div><button type="button" className="panel-window-close" aria-label="Закрыть окно" onClick={() => setActivePanel(null)}>×</button></div>
+          <details className="scale-settings"><summary>Масштаб и габариты техники</summary><div className="map-dimension-controls"><label>Погрузчик Д × Ш <span><input type="number" min="0.5" max="10" step="0.1" value={physicalScaleDraft.forkliftLengthM} onChange={event => updatePhysicalScale('forkliftLengthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftLengthM: String(physicalScale.forkliftLengthM) }))} aria-label="Длина погрузчика в метрах" /> × <input type="number" min="0.5" max="5" step="0.1" value={physicalScaleDraft.forkliftWidthM} onChange={event => updatePhysicalScale('forkliftWidthM', event.target.value)} onBlur={() => setPhysicalScaleDraft(current => ({ ...current, forkliftWidthM: String(physicalScale.forkliftWidthM) }))} aria-label="Ширина погрузчика в метрах" /> м</span></label><button type="button" onClick={resetPhysicalScale}>Демо значения</button><small>Ширина стеллажей по X, глубина по Y; локальная настройка схемы, не параметры симуляции</small></div></details>
+</section>,
+    agents: <section className="panel agent-panel" data-docked="" aria-labelledby="agents-panel-title">
+            <div className="panel-heading compact-heading"><div><h2 id="agents-panel-title">ИИ и агенты</h2></div><button type="button" className="panel-window-close" aria-label="Закрыть панель" onClick={() => closePanel('agents')}>×</button></div>
             {state.dispatch ? <DispatchPanel api={API} dispatch={state.dispatch} disabled={busy || connection !== 'online'}
               onMode={mode => void command('/api/dispatch/mode', { mode })}
               targets={[...warehouse!.orders.map(order => order.id), ...robots.map(robot => robot.id)]} />
               : <p>Сервер не передал данные планирования.</p>}
+          </section>,
+  }
+  return (
+    <div className="app-shell">
+
+
+      <header className="topbar">
+        <div className="brand-lockup"><div className="brand-mark">W</div><div><strong>Центр управления складом</strong></div></div>
+        <div className="topbar-center"><span className={`connection-dot ${connection}`} />{connection === 'online' ? 'На связи' : 'Нет связи'}</div>
+        <Navigation screen={screen} onChange={nextScreen => { setDetailRackId(null); setScreen(nextScreen) }} /><div className="topbar-right"><ThemeToggle /><button type="button" className="simulation-speed" disabled={busy || connection !== 'online'} title="Ускорение времени симуляции: ×1, ×2, ×5, ×10. Скорость движения виртуальной техники." aria-label={`Скорость симуляции ×${state.speed ?? 1}. Нажмите для переключения`} onClick={() => { const speeds = [1, 2, 5, 10]; void command('/api/simulation/speed', { speed: speeds[(speeds.indexOf(state.speed ?? 1) + 1) % speeds.length] }) }}><LineIcon kind="speed" /> ×{state.speed ?? 1}</button><span className={`simulation-badge ${state.running ? 'is-running' : ''}`}><span />{state.running ? 'Симуляция активна' : 'На паузе'}</span><button className="header-start" disabled={busy || connection !== 'online'} onClick={() => command(state.running ? '/api/simulation/pause' : '/api/simulation/start')}>{state.running ? 'Приостановить' : 'Запустить'}</button>{screen === 'driver' && <span className="live-clock">Такт · {state.tick}</span>}</div>
+      </header>
+
+      <main className={`workspace ${screen === 'driver' ? 'driver-workspace' : ''}`}>
+        {error && <div className="workflow-error" role="alert">{error}</div>}
+        {connection === 'offline' && <div className="workflow-error" role="status">Связь потеряна. Показано последнее известное состояние; команды недоступны.</div>}
+        {screen === 'driver' ? (
+          driverRobot ? <DriverTablet rackDetails={rackDetails} orders={orders} robot={driverRobot} robots={robots} order={driverOrder} cells={<WarehouseScene running={state.running} simulationSpeed={state.speed ?? 1} warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={driverRobot.id} target={driverOrder ? (['offered', 'to_pickup', 'confirm_pickup'].includes(driverRobot.driver_phase) ? driverOrder.pickup : driverOrder.dropoff) : driverRobot.driver_phase === 'returning' ? driverRobot.home : null} onRack={id => setDetailRackId(id)} onRobot={setDriverId} />} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
+        ) : <>
+        <section className="main-column">
+          <div className="page-heading">
+            <div><h1>Диспетчерская</h1><p className="muted">{formatCount(warehouse!.racks.length, 'стеллаж', 'стеллажа', 'стеллажей')} · ≈ { (warehouse!.width * physicalScale.cellStepM).toLocaleString("ru") } × { (warehouse!.height * physicalScale.cellStepM).toLocaleString("ru") } м</p></div>
+            <div className="shift-actions">
+            <button className="secondary-button" disabled={busy || connection !== 'online'} onClick={() => replaceShift(true)}>Случайная смена</button>
+            <button className="secondary-button" disabled={busy || connection !== 'online'} onClick={() => replaceShift(false)}>Сбросить смену</button>
+            </div>
+          </div>
+          <div className="metric-row">
+            <Metric label="В движении" value={`${activeRobots} / ${robots.length}`} />
+            <Metric label="Открытые заказы" value={String(pending)} />
+            <Metric label="Выполнено за смену" value={String(completed)} />
+            <Metric label="Такт симуляции" value={String(state.tick)} />
+          </div>
+
+          <nav className="module-launcher" aria-label="Дополнительные панели склада">
+            <button type="button" aria-expanded={openPanels.includes('offers')} onClick={() => togglePanel('offers')}><LineIcon kind="orders" />К принятию<b>{offers.length}</b></button>
+            <button type="button" aria-expanded={openPanels.includes('orders')} onClick={() => togglePanel('orders')}><LineIcon kind="orders" />Заказы<b>{pending}</b></button>
+            <button type="button" aria-expanded={openPanels.includes('fleet')} onClick={() => togglePanel('fleet')}><LineIcon kind="fleet" />Техника<b>{robots.length}</b></button>
+            <button type="button" aria-expanded={openPanels.includes('inventory')} onClick={() => togglePanel('inventory')}><LineIcon kind="stock" />Запасы<b>{inventory.length}</b></button>
+            <button type="button" aria-expanded={openPanels.includes('control')} onClick={() => togglePanel('control')}><LineIcon kind="control" />Управление</button>
+            <button type="button" aria-expanded={openPanels.includes('agents')} onClick={() => togglePanel('agents')}><LineIcon kind="agents" />ИИ и агенты</button>
+            <button type="button" aria-expanded={openPanels.includes('activity')} onClick={() => togglePanel('activity')}><LineIcon kind="events" />События<b>{visibleEvents.length}</b></button>
+            {selectedRackData || selectedRobot || selectedOrder ? <button type="button" aria-expanded={openPanels.includes('object')} onClick={() => togglePanel('object')}><LineIcon kind="object" />Выбранный объект</button> : null}
+          </nav>
+          <div className="shift-event-line">
+            <button type="button" onClick={() => togglePanel('activity')}>Последнее событие</button>
+            <span title={state.events[0]?.message}>{state.events[0]?.message ?? 'Событий пока нет'}</span>
+          </div>
+
+          <section className="panel map-panel" id="warehouse-map-panel">
+            <div className="panel-heading map-heading">
+              <h2>Карта склада</h2>
+              <div className="map-actions"><span className="map-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
+            </div>
+            <div className="dispatch-floor">
+              <WarehouseScene running={state.running} simulationSpeed={state.speed ?? 1} warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={focusVehicle} onRack={selectRack} onRobot={selectRobot} />
+              <div className="floor-fleet">
+            <ShiftAttention robots={robots} closures={warehouse!.closed_cells} online={connection === 'online'}
+              running={state.running} onVehicle={selectRobot} onClosures={() => { setDetailRackId(null); openPanel('control') }} />
+
+                <div className="workspace-panel-slot" ref={panelRail}>
+                  {visiblePanels.map((panel, index) => <section key={panel} data-window={panel}
+                    className={`dock-window ${dropTarget === panel ? 'dock-drop-target' : ''}`}
+                    aria-label={panelNames[panel]}
+                    onDragOver={event => {
+                      if (!draggedPanel.current || draggedPanel.current === panel) return
+                      event.preventDefault()
+                      event.dataTransfer.dropEffect = 'move'
+                      setDropTarget(panel)
+                    }}
+                    onDrop={event => {
+                      if (!draggedPanel.current) return
+                      event.preventDefault()
+                      movePanel(draggedPanel.current, panel)
+                      draggedPanel.current = null
+                      setDropTarget(null)
+                    }}>
+                    <div className="dock-window-tools" role="group" aria-label={`Порядок панели «${panelNames[panel]}»`}>
+                      <span draggable className="dock-grip" title="Перетащить панель"
+                        onDragStart={event => {
+                          draggedPanel.current = panel
+                          event.dataTransfer.setData('text/plain', panel)
+                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.setDragImage(event.currentTarget.closest('.dock-window')!, 20, 12)
+                        }}
+                        onDragEnd={() => { draggedPanel.current = null; setDropTarget(null) }}>⠿</span>
+                      <button type="button" aria-label={`Выше · ${panelNames[panel]}`} title="Выше" disabled={index === 0}
+                        onClick={() => movePanel(panel, visiblePanels[index - 1])}>↑</button>
+                      <button type="button" aria-label={`Ниже · ${panelNames[panel]}`} title="Ниже" disabled={index === visiblePanels.length - 1}
+                        onClick={() => movePanel(panel, visiblePanels[index + 1])}>↓</button>
+                    </div>
+                    {panelContent[panel]}
+                  </section>)}
+                </div>
+              </div>
+            </div>
           </section>
 
-          <div className="footnote">Виртуальный склад</div>
-        </aside>
+          {state.dispatch?.decisions[0] && <section className="panel latest-decision" aria-live="polite">
+            <div><strong>Последнее решение · {state.dispatch.decisions[0].source === 'demo' ? 'демонстрация без LLM' : state.dispatch.decisions[0].source === 'model' ? 'ИИ' : state.dispatch.decisions[0].source === 'fallback' ? 'резервные правила' : 'правила'}</strong>
+              <p>{state.dispatch.decisions[0].source === 'model' && state.dispatch.decisions[0].batches
+                ? `ИИ выбрал ${state.dispatch.decisions[0].selected_batch}. Факты маршрута и оценки рассчитаны сервером.`
+                : state.dispatch.decisions[0].reason}</p>
+              {state.dispatch.decisions[0].selected.map(key => {
+                const facts = state.dispatch!.decisions[0].options[key]
+                return <p className="decision-evidence" key={key}><b>{key}</b> · {summarizeDecisionFacts(facts)}</p>
+              })}
+            </div>
+            <button type="button" onClick={() => { setDetailRackId(null); openPanel('agents') }}>Все варианты</button>
+          </section>}
+
+        </section>
         </>}
       </main>
     </div>
@@ -512,6 +597,9 @@ function summarizeDecisionFacts(value: unknown): string {
   }).join('; ')
   if (!value || typeof value !== 'object') return ''
   const facts = value as Record<string, unknown>
+  if (typeof facts.robot === 'string' && facts.pickups && typeof facts.distance !== 'number') {
+    return [facts.robot, ...Object.entries(facts.pickups).map(([address, quantity]) => `${address} · ${quantity} шт.`)].join(' · ')
+  }
   if (typeof facts.robot === 'string') return `${facts.robot}, маршрут ${Number(facts.distance) * NODE_SPACING_M} м, оценка ${facts.route_score}`
   if (typeof facts.passes === 'string') return `${facts.passes}, маршрут ${Number(facts.passage_cells) * NODE_SPACING_M} м`
   return ''
@@ -538,15 +626,15 @@ const phaseNames: Record<Robot['driver_phase'], string> = {
   confirm_pickup: 'Ждёт подтверждения забора', to_dropoff: 'Везёт товар', confirm_delivery: 'Ждёт подтверждения доставки',
 }
 
-function ShiftAttention({ robots, closures, online, running, onVehicle, onClosures }: {
+function ShiftAttention({ robots, closures, online, onVehicle, onClosures }: {
   robots: Robot[]; closures: [number, number][]; online: boolean; running: boolean;
   onVehicle: (id: string) => void; onClosures: () => void;
 }) {
-  const confirmations = { offered: 'ожидает принятия задания', confirm_pickup: 'ожидает подтверждения забора', confirm_delivery: 'ожидает подтверждения доставки' }
+  const confirmations = { confirm_pickup: 'ожидает подтверждения забора', confirm_delivery: 'ожидает подтверждения доставки' }
   if (!online) return <p className="shift-note" role="status">Связь потеряна. Показано последнее состояние склада.</p>
   const rows = robots.map(robot => {
     const driverMessage = confirmations[robot.driver_phase as keyof typeof confirmations]
-    const message = robot.stopped_by_operator ? 'остановлен оператором' : driverMessage || (robot.status === 'waiting' ? 'ожидает свободного пути' : '')
+    const message = robot.stopped_by_operator ? 'остановлен оператором' : driverMessage || (robot.status === 'waiting' && ['to_pickup', 'to_dropoff', 'returning'].includes(robot.driver_phase) ? 'ожидает свободного пути' : '')
     if (!message) return null
     return <li key={robot.id}><span><b>{robot.id}</b> {message}{robot.order_id && ' · ' + robot.order_id}</span>
       {driverMessage && !robot.stopped_by_operator
@@ -554,14 +642,14 @@ function ShiftAttention({ robots, closures, online, running, onVehicle, onClosur
         : <button onClick={() => onVehicle(robot.id)}>На карте</button>}
     </li>
   }).filter(Boolean)
-  if (!rows.length && !closures.length) return <p className="shift-note">{running ? 'Сейчас подтверждений и вмешательств не требуется.' : 'Смена на паузе. Для движения погрузчиков нажмите «Запустить».'}</p>
+  if (!rows.length && !closures.length) return null
   return <section className="shift-attention" aria-label="Требует внимания"><strong>Требует внимания</strong>
     <ul>{closures.length > 0 && <li><span>Перекрытые проезды · {closures.map(p => metricPoint(p)).join(', ')}</span><button onClick={onClosures}>Управление проходами</button></li>}{rows}</ul>
   </section>
 }
 
-function DriverTablet({ orders, initialTaskOpen, robot, robots, order, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
-  orders: Order[]; initialTaskOpen: boolean; robot: Robot; robots: Robot[]; order?: Order; cells: React.ReactNode; physicalScale: PhysicalScale;
+function DriverTablet({ rackDetails, orders, robot, robots, order, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
+  rackDetails: React.ReactNode; orders: Order[]; robot: Robot; robots: Robot[]; order?: Order; cells: React.ReactNode; physicalScale: PhysicalScale;
   running: boolean; busy: boolean; online: boolean; events: EventItem[];
   onSelect: (id: string) => void; onCommand: (path: string, body?: unknown) => Promise<void>;
 }) {
@@ -583,36 +671,8 @@ function DriverTablet({ orders, initialTaskOpen, robot, robots, order, cells, ph
       setAcceptingAll(false)
     }
   }
-  const [taskOpen, setTaskOpen] = useState(initialTaskOpen)
-  const [taskOffset, setTaskOffset] = useState({ x: 0, y: 0 })
-  const taskDrag = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
-  useEffect(() => {
-    if (!taskOpen) return
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setTaskOpen(false) }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => { window.removeEventListener('keydown', closeOnEscape) }
-  }, [taskOpen])
-  useEffect(() => { setTaskOffset({ x: 0, y: 0 }); taskDrag.current = null }, [taskOpen])
-  const startTaskDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!taskOpen || event.button !== 0 || (event.target as HTMLElement).closest('button')) return
-    taskDrag.current = { x: event.clientX, y: event.clientY, offsetX: taskOffset.x, offsetY: taskOffset.y }
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-  const moveTaskDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!taskDrag.current) return
-    const nextX = taskDrag.current.offsetX + event.clientX - taskDrag.current.x
-    const nextY = taskDrag.current.offsetY + event.clientY - taskDrag.current.y
-    const maxX = Math.max(0, window.innerWidth / 2 - 120)
-    const maxY = Math.max(0, window.innerHeight / 2 - 80)
-    setTaskOffset({ x: Math.max(-maxX, Math.min(maxX, nextX)), y: Math.max(-maxY, Math.min(maxY, nextY)) })
-  }
-  const endTaskDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    taskDrag.current = null
-  }
-  const taskStyle = { '--task-drag-x': `${taskOffset.x}px`, '--task-drag-y': `${taskOffset.y}px` } as CSSProperties
   const actions = {
-    offered: { command: 'accept', label: 'Принять задание' },
+    offered: { command: 'accept', label: 'Принять заказ' },
     confirm_pickup: { command: 'pickup', label: 'Подтверждаю: товар забран' },
     confirm_delivery: { command: 'deliver', label: 'Подтверждаю: товар доставлен' },
   }
@@ -624,20 +684,22 @@ function DriverTablet({ orders, initialTaskOpen, robot, robots, order, cells, ph
     returning: 'Доставка подтверждена. Погрузчик освобождает зону отгрузки и возвращается на стоянку.',
     idle: 'Все ваши задания завершены или пока не назначены. Ожидайте диспетчера.',
     offered: 'Проверьте товар и адреса. После принятия виртуальный погрузчик начнёт движение.',
-    to_pickup: 'Следуйте к месту забора. По прибытии подтвердите, что забрали товар.',
+    to_pickup: 'Погрузчик едет к адресу отбора и загрузит зарезервированный товар.',
     confirm_pickup: 'Вы у места забора. Сверьте товар с заданием и подтвердите погрузку.',
-    to_dropoff: 'Товар на борту. Следуйте к месту доставки.',
+    to_dropoff: 'Товар на борту. Погрузчик едет к зоне отгрузки.',
     confirm_delivery: 'Вы у места доставки. Разгрузите товар и подтвердите завершение.',
   }
   return <>
-    {fleetOpen && <DriverQueue controls orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setFleetOpen(false)} busy={busy || !online || acceptingAll} onCommand={onCommand} />}
-    {queueOpen && <DriverQueue orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setQueueOpen(false)} />}
-    <section className={`driver-tablet ${taskOpen ? 'task-dialog-open' : ''}`}>
-    <header className="tablet-header"><div><div className="tablet-brand"><span className="brand-mark">W</span><strong>Планшет водителя</strong></div><label className="vehicle-select">Погрузчик <select value={robot.id} onChange={(event) => { setTaskOpen(false); onSelect(event.target.value) }}>{robots.map((vehicle) => <option key={vehicle.id}>{vehicle.id}</option>)}</select></label><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={fleetOpen} onClick={() => setFleetOpen(value => !value)}><span>Все погрузчики</span><b>{robots.length}</b></button><button className="driver-task-trigger driver-accept-all" type="button" disabled={busy || acceptingAll || !online || !offeredRobots.length} title="Принять все назначенные задания. Забор и доставка подтверждаются отдельно." onClick={() => void acceptAllOrders()}><span>{acceptingAll ? 'Принимаем задания…' : 'Принять все задания'}</span><b>{offeredRobots.length}</b></button><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={queueOpen} onClick={() => setQueueOpen(value => !value)}><span>Очередь заказов</span><b>{orders.filter(order => !['completed', 'cancelled'].includes(order.status)).length}</b></button><button className="driver-task-trigger" type="button" aria-haspopup="dialog" aria-expanded={taskOpen} onClick={() => setTaskOpen(true)}><span>Текущее задание</span><b>{order?.id ?? 'Ожидает'}</b></button></div><div className="tablet-live">{online ? '● Подключён' : '○ Нет связи'}</div></header>
+    <section className="driver-tablet">
+    <header className="tablet-header"><div><div className="tablet-brand"><span className="brand-mark">W</span><strong>Планшет водителя</strong></div><label className="vehicle-select">Погрузчик <select value={robot.id} onChange={(event) => { onSelect(event.target.value) }}>{robots.map((vehicle) => <option key={vehicle.id}>{vehicle.id}</option>)}</select></label><button className="driver-task-trigger" type="button" aria-expanded={fleetOpen} onClick={() => { setQueueOpen(false); setFleetOpen(value => !value) }}><span>Все погрузчики</span><b>{robots.length}</b></button><button className="driver-task-trigger driver-accept-all" type="button" disabled={busy || acceptingAll || !online || !offeredRobots.length} title="Принять все назначенные задания. Забор и доставка выполняются автоматически." onClick={() => void acceptAllOrders()}><span>{acceptingAll ? 'Принимаем задания…' : 'Принять все задания'}</span><b>{offeredRobots.length}</b></button><button className="driver-task-trigger" type="button" aria-expanded={queueOpen} onClick={() => { setFleetOpen(false); setQueueOpen(value => !value) }}><span>Очередь заказов</span><b>{orders.filter(order => !['completed', 'cancelled'].includes(order.status)).length}</b></button></div><div className="tablet-live">{online ? '● Подключён' : '○ Нет связи'}</div></header>
     {!running && <div className="workflow-notice driver-pause-notice">Движение на паузе. Диспетчер может запустить или продолжить симуляцию. Подтверждения доступны.</div>}
     <div className="tablet-content">
-      <section className="tablet-task panel" role={taskOpen ? 'dialog' : undefined} aria-hidden={!taskOpen} aria-labelledby="driver-task-title" style={taskStyle}><div className="task-kicker" onPointerDown={startTaskDrag} onPointerMove={moveTaskDrag} onPointerUp={endTaskDrag} onPointerCancel={endTaskDrag}><span id="driver-task-title">Текущее задание</span><span className={`robot-status-pill ${robot.status}`}>{robot.stopped_by_operator ? 'Остановлен' : phaseNames[robot.driver_phase]}</span>{taskOpen && <button className="driver-task-close" type="button" aria-label="Закрыть задание" onClick={() => setTaskOpen(false)}>×</button>}</div>
-        <h1>{order?.id ?? 'Ожидание задания'}</h1><p className="task-action">{phaseNames[robot.driver_phase]}</p>
+      <div className="driver-tools">
+    {fleetOpen && <DriverQueue controls orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setFleetOpen(false)} busy={busy || !online || acceptingAll} onCommand={onCommand} />}
+    {queueOpen && <DriverQueue orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setQueueOpen(false)} />}
+
+      <section className="tablet-task panel" aria-labelledby="driver-task-title"><div className="task-kicker"><span id="driver-task-title">Задание · {robot.id}</span><span className={`robot-status-pill ${robot.status}`}>{phaseNames[robot.driver_phase]}</span></div>
+        <h1>{order?.id ?? 'Ожидание задания'}</h1>
         <p className="driver-instruction">{robot.stopped_by_operator ? 'Движение остановлено. Продолжите работу, когда будете готовы.' : instructions[robot.driver_phase]}</p>
         {order && <><div className="task-product"><span className="stock-box">▧</span><div><small>Товар · {order.product_id} · {order.quantity} шт.</small><strong>{order.item}</strong><small>Размер коробки · {order.length_mm != null && order.width_mm != null && order.height_mm != null ? formatDimensions(order.length_mm, order.width_mm, order.height_mm) : 'не указан'}</small><small>Адрес отбора · {order.storage_location_id || 'назначается'}</small>{currentAllocation?.placement_snapshot.length ? <small>Координаты коробок · {currentAllocation.placement_snapshot.map(position => formatCoordinates(position.x_mm, position.y_mm)).join(' · ')}</small> : null}</div></div>
         <ol className="task-steps">{['Принять', 'К товару', 'Забрать', 'К отгрузке', 'Доставить'].map((label, index) => <li key={label} className={index === step ? 'current' : index < step ? 'done' : ''}><b>{index < step ? '✓' : index + 1}</b>{label}</li>)}</ol>
@@ -647,13 +709,14 @@ function DriverTablet({ orders, initialTaskOpen, robot, robots, order, cells, ph
           <button className="tablet-secondary" disabled={busy || (!order && robot.driver_phase !== 'returning')} onClick={() => onCommand(`/api/robots/${robot.id}/${robot.stopped_by_operator ? 'resume' : 'stop'}`)}>{robot.stopped_by_operator ? '▶ Продолжить' : 'Ⅱ Приостановить движение'}</button>
           <button className="tablet-alert" disabled={busy || !robot.can_report_obstacle} onClick={() => onCommand(`/api/robots/${robot.id}/obstacle`)}>Проход передо мной перекрыт</button>
         </div>
-        <p className="tablet-hint">В этом режиме движение моделируется. Забор и доставка выполняются только после вашего подтверждения.</p>
+        <p className="tablet-hint">После принятия заказа отбор, доставка и возврат на стоянку выполняются автоматически.</p>
       </section>
+      </div>
       <section className="tablet-map panel"><div className="tablet-map-title"><div><h2>{destination ? `Цель: ${metricPoint(destination)}` : 'Карта склада'}</h2><small className="tablet-dimensions">Габарит {physicalScale.forkliftLengthM.toFixed(1)} × {physicalScale.forkliftWidthM.toFixed(1)} м (демо)</small></div><span className="map-live">{online ? '● На связи' : '○ Нет связи'}</span></div>
       {robot.status === 'waiting' && ['to_pickup', 'to_dropoff', 'returning'].includes(robot.driver_phase) && <div className="workflow-notice">Свободного пути нет. Ожидайте открытия прохода диспетчером.</div>}
       {robot.route_version > 0 && <div className="route-update">Маршрут пересмотрен · версия {robot.route_version}</div>}
       <div className="map-legend"><span><i className="legend-dot robot-dot" /> Выбранный погрузчик</span><span><i className="legend-box route-dot" /> Ваш маршрут</span><span><i className="legend-box closed-dot" /> Перекрытый проход</span></div>
-      <div className="tablet-scene">{cells}</div><div className="tablet-position"><span><small>ВАША ПОЗИЦИЯ</small><strong>{metricPoint(robot.position_m ?? robot.position, !!robot.position_m)}</strong></span><span><small>ДО ЦЕЛИ</small><strong>{(robot.route.length ? (robot.route_remaining_m ?? robot.route.length * NODE_SPACING_M).toLocaleString('ru') + ' м' : '') || (destination && key(destination) !== key(robot.position) ? '–' : '0 м')}</strong></span><span><small>ГРУЗ</small><strong>{robot.carrying_item ? 'На борту' : 'Пусто'}</strong></span></div>
+      <div className="tablet-scene">{cells}</div>{rackDetails}<div className="tablet-position"><span><small>ВАША ПОЗИЦИЯ</small><strong>{metricPoint(robot.position_m ?? robot.position, !!robot.position_m)}</strong></span><span><small>ДО ЦЕЛИ</small><strong>{(robot.route.length ? (robot.route_remaining_m ?? robot.route.length * NODE_SPACING_M).toLocaleString('ru') + ' м' : '') || (destination && key(destination) !== key(robot.position) ? '–' : '0 м')}</strong></span><span><small>ГРУЗ</small><strong>{robot.carrying_item ? 'На борту' : 'Пусто'}</strong></span></div>
       <div className="driver-events" aria-live="polite">{events.filter((event) => event.robot_id === robot.id).slice(0, 3).map((event) => <p key={event.id}>{event.message}</p>)}</div>
       </section>
     </div>
@@ -669,23 +732,6 @@ function formatCount(value: number, one: string, few: string, many: string) {
 }
 
 function RackDetails({ rack, locations, onClose }: { rack: Rack; locations: StorageLocation[]; onClose: () => void }) {
-  const dialogRef = useRef<HTMLElement>(null)
-  const [drawerOffset, setDrawerOffset] = useState({ x: 0, y: 0 })
-  const drawerDrag = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null
-    dialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
-    const trap = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
-      if (event.key !== 'Tab') return
-      const items = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input, select, [tabindex="0"]') ?? [])]
-      const first = items[0], last = items[items.length - 1]
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
-    }
-    document.addEventListener('keydown', trap)
-    return () => { document.removeEventListener('keydown', trap); previous?.focus() }
-  }, [])
   const byLevel = new Map<number, StorageLocation[]>()
   locations.forEach(location => byLevel.set(location.level, [...(byLevel.get(location.level) || []), location]))
   const levels = [...byLevel.keys()].sort((a, b) => a - b)
@@ -707,28 +753,8 @@ function RackDetails({ rack, locations, onClose }: { rack: Rack; locations: Stor
   }
   const showAllLevels = expandedLevels.size !== levels.length
 
-  const startDrawerDrag = (event: ReactPointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return
-    drawerDrag.current = { x: event.clientX, y: event.clientY, offsetX: drawerOffset.x, offsetY: drawerOffset.y }
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-  const moveDrawerDrag = (event: ReactPointerEvent<HTMLElement>) => {
-    if (!drawerDrag.current) return
-    const nextX = drawerDrag.current.offsetX + event.clientX - drawerDrag.current.x
-    const nextY = drawerDrag.current.offsetY + event.clientY - drawerDrag.current.y
-    const maxX = Math.max(0, window.innerWidth / 2 - 120)
-    const maxY = Math.max(0, window.innerHeight / 2 - 80)
-    setDrawerOffset({ x: Math.max(-maxX, Math.min(maxX, nextX)), y: Math.max(-maxY, Math.min(maxY, nextY)) })
-  }
-  const endDrawerDrag = (event: ReactPointerEvent<HTMLElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    drawerDrag.current = null
-  }
-  const drawerStyle = { '--rack-drawer-drag-x': `${drawerOffset.x}px`, '--rack-drawer-drag-y': `${drawerOffset.y}px` } as CSSProperties
-
-  return <div className="rack-drawer-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }} onKeyDown={event => { if (event.key === 'Escape') onClose() }}>
-    <section ref={dialogRef} className="rack-drawer" role="dialog" aria-labelledby="rack-drawer-title" style={drawerStyle}>
-      <header className="rack-dialog-header" onPointerDown={startDrawerDrag} onPointerMove={moveDrawerDrag} onPointerUp={endDrawerDrag} onPointerCancel={endDrawerDrag}><div><p className="rack-dialog-kicker">Складское место</p><div className="rack-dialog-title-line"><h2 id="rack-drawer-title">Стеллаж {rack.id}</h2><span className="rack-type-badge">{rack.rack_type_title}</span></div><p className="rack-dialog-purpose">{rack.purpose}</p></div><button type="button" className="rack-dialog-close" aria-label="Закрыть карточку стеллажа" onClick={onClose}>×</button></header>
+  return <section className="rack-drawer rack-docked" aria-labelledby="rack-drawer-title">
+      <header className="rack-dialog-header"><div><p className="rack-dialog-kicker">Складское место</p><div className="rack-dialog-title-line"><h2 id="rack-drawer-title">Стеллаж {rack.id}</h2><span className="rack-type-badge">{rack.rack_type_title}</span></div><p className="rack-dialog-purpose">{rack.purpose}</p></div><button type="button" className="rack-dialog-close" aria-label="Закрыть карточку стеллажа" onClick={onClose}>×</button></header>
       <div className="rack-dialog-body">
       <div className="rack-dialog-specs"><span>{formatDimensions(rack.width_mm, rack.depth_mm, rack.height_mm)}</span><i /> <span>{formatCount(rack.levels, 'ярус', 'яруса', 'ярусов')}</span></div>
       <section className="rack-summary" aria-label="Сводка стеллажа">
@@ -760,7 +786,6 @@ function RackDetails({ rack, locations, onClose }: { rack: Rack; locations: Stor
       {!locations.length && <div className="rack-empty-state"><span>▤</span><strong>Места пока не добавлены</strong><p>Для этого стеллажа нет данных о местах хранения.</p></div>}
       </div>
     </section>
-  </div>
 }
 
 function RackKpi({ label, value, suffix, tone }: { label: string; value: string; suffix: string; tone: string }) {
@@ -869,3 +894,19 @@ function StorageSlot({ location }: { location: StorageLocation }) {
   </article>
 }
 export default App
+
+function OfferWindow({ offers, orders, busy, running, close, accept, gateName }: { running: boolean; gateName: (point: [number, number]) => string; offers: Robot[]; orders: Order[]; busy: boolean; close: () => void; accept: (robot: Robot) => void }) {
+  return <aside className="offer-window" aria-labelledby="offer-title">
+    <header>
+      <h2 id="offer-title">Заказы к принятию</h2><button className="panel-window-close" aria-label="Закрыть панель принятия заказов" onClick={close}>×</button>
+    </header>
+    {!offers.length && <p className="offer-empty">{running ? 'Новых назначений пока нет.' : 'Здесь появятся назначения погрузчиков после запуска смены.'}</p>}
+    {offers.map(robot => {
+      const order = orders.find(o => o.id === robot.order_id)
+      if (!order) return null
+      return <article key={robot.id}><small>{robot.id} · {order.id}</small><strong>{order.item} · {order.quantity} шт.</strong>
+        <span>Стеллаж {order.storage_location_id?.split('-L')[0]} → {gateName(order.dropoff)}</span>
+        <button className="header-start" disabled={busy || !running} onClick={() => accept(robot)}>Принять заказ</button></article>
+    })}
+  </aside>
+}

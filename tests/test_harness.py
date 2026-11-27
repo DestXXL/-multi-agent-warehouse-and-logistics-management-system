@@ -1,5 +1,6 @@
 import asyncio
 import json
+from random import Random
 import unittest
 from unittest.mock import patch
 
@@ -7,7 +8,9 @@ import httpx
 from fastapi.testclient import TestClient
 
 from backend.harness import AgentHarness, Settings
-from backend.planning import planning_pass, compare_shift
+from backend.planning import planning_pass, compare_shift, plan_zone
+from backend.dispatch import Proposal
+from backend.scenario import generate_shift
 from backend.simulation import WarehouseSimulation
 
 
@@ -96,10 +99,54 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_responses_are_rejected(self):
         for body in ([], {}, {"choices": []}, {"choices": [{"message": {"content": "not JSON"}}]}):
-            self.harness.cooldown_until = 0
+            self.harness.role_cooldowns.clear()
             self.assertIsNone(await self.call(lambda _: httpx.Response(200, json=body)))
-        self.harness.cooldown_until = 0
+            self.assertEqual(self.harness.history[0]["status"], "error")
+        self.harness.role_cooldowns.clear()
         self.assertIsNone(await self.call(lambda _: reply(reason=" ")))
+
+    async def test_zone_error_does_not_block_manager_and_recomputes_fallback(self):
+        self.sim.start(assign_orders=False)
+        first = Proposal("zone", 1, {"old-1": [], "old-2": []}, {
+            "old-1": {"passes": "R-01", "passage_cells": 1},
+            "old-2": {"passes": "R-01", "passage_cells": 2},
+        })
+        fresh = Proposal("zone", 2, {"new-1": []}, {"new-1": {"passes": "R-01", "passage_cells": 3}})
+        for choice in ([], ["old-1"]):
+            self.harness.role_cooldowns.clear()
+            self.harness.seen.clear()
+            with (patch("backend.planning.dispatch.zone_options", side_effect=[first, fresh]),
+                  patch("backend.planning.dispatch.apply_zone", side_effect=lambda sim, proposal, choice: proposal is fresh) as apply,
+                  patch("backend.planning.dispatch.record")):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: reply(choice))) as client:
+                    self.assertTrue(await plan_zone(self.sim, client))
+                apply.assert_called_with(self.sim, fresh, "new-1")
+            self.assertEqual(self.harness.cooldown_until, 0)
+        self.assertIsNotNone(await self.call(lambda _: reply(["plan-1"]), "manager",
+                                            {"plans": {"plan-1": ["order-1"]}}))
+
+    async def test_single_zone_choice_skips_model(self):
+        self.sim.start(assign_orders=False)
+        only = Proposal("zone", 1, {"only": []}, {"only": {"passes": "R-01", "passage_cells": 3}})
+        with (patch("backend.planning.dispatch.zone_options", return_value=only),
+              patch("backend.planning.dispatch.apply_zone", return_value=True) as apply,
+              patch("backend.planning.dispatch.record")):
+            self.assertTrue(await plan_zone(self.sim, object()))
+        apply.assert_called_once_with(self.sim, only, "only")
+        self.assertEqual(self.harness.requests, 0)
+        self.assertEqual(self.sim.metrics["fallbacks"], 0)
+
+    async def test_motion_deadline_leaves_other_roles_available(self):
+        async def delayed(_):
+            await asyncio.sleep(1)
+            return reply(["yield-1"])
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(delayed)) as client:
+            self.assertIsNone(await self.harness.consult(client, self.sim, "zone",
+                                                         {"options": {"yield-1": {}}}, deadline=0.01))
+        self.assertIn("zone", self.harness.role_cooldowns)
+        self.assertEqual(self.harness.cooldown_until, 0)
+        self.assertIsNotNone(await self.call(lambda _: reply()))
 
     async def test_request_budget_survives_simulation_reset(self):
         self.harness.settings = Settings(request_limit=1)
@@ -174,6 +221,28 @@ class HarnessAPITests(unittest.TestCase):
         response = self.client.put("/api/dispatch/settings", json={**settings, "max_tokens": 300})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.harness.settings.max_tokens, 300)
+
+    def test_comparison_replays_shift_template_without_touching_current_state(self):
+        layout, template = generate_shift(Random(3))
+        self.sim.custom_layout = layout
+        self.sim.shift_template = (layout, template)
+        self.sim.reset()
+        self.sim.dispatch_mode = "demo"
+        self.sim.start()
+        self.sim.tick()
+        self.sim.pause()
+        before = self.sim.state()
+
+        response = self.client.post("/api/dispatch/compare")
+        self.assertEqual(response.status_code, 200)
+        comparison = response.json()
+        self.assertEqual(comparison["scenario"], "shift_template")
+        self.assertEqual(self.sim.state(), before)
+        expected_orders = {order.id for order in template.orders}
+        for run in (comparison["rules"], comparison["model"]):
+            self.assertEqual(set(run["deliveries"]), expected_orders)
+            self.assertEqual(run["completed"], len(expected_orders))
+        self.assertGreater(comparison["model"]["accepted_decisions"], 0)
 
     def test_modes_without_credentials_and_offline_assistant(self):
         self.assertEqual(self.client.post("/api/dispatch/mode", json={"mode": "model"}).status_code, 409)

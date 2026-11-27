@@ -1,6 +1,9 @@
 """Coordinate model requests and run an isolated comparison shift."""
 
 import asyncio
+from copy import deepcopy
+import time
+
 import httpx
 
 from backend.route_advisor import plan_routes
@@ -28,8 +31,7 @@ async def planning_pass(sim, client: httpx.AsyncClient | None = None, *, request
                            "closed_cells": sorted(sim.zone_agent.blocked_cells)}
                 warehouse, mode = sim.warehouse, sim.dispatch_mode
                 try:
-                    async with asyncio.timeout(2):
-                        response = await consult(client, sim, "manager", payload) if client is not None or sim.dispatch_mode == "demo" else None
+                    response = await consult(client, sim, "manager", payload) if client is not None or sim.dispatch_mode == "demo" else None
                 except TimeoutError:
                     response = None
                 if not sim.running or sim.dispatch_mode != mode or sim.warehouse is not warehouse:
@@ -65,7 +67,7 @@ async def planning_pass(sim, client: httpx.AsyncClient | None = None, *, request
         client = None
     if sim.dispatch_mode == "model":
         zoned = await plan_zone(sim, client)
-        return (await plan_routes(sim, client) if client is not None else False) or zoned or changed
+        return await plan_routes(sim, client, request_limit=request_limit) or zoned or changed
     return await plan_zone(sim, client if use_model else None) or changed
 
 
@@ -74,7 +76,8 @@ async def plan_zone(sim, client) -> bool:
     if not proposal.options:
         return False
     warehouse, mode = sim.warehouse, sim.dispatch_mode
-    response = await consult(client, sim, "zone", proposal.payload()) if client is not None or sim.dispatch_mode == "demo" else None
+    ask = len(proposal.options) > 1 and (client is not None or mode == "demo")
+    response = await consult(client, sim, "zone", proposal.payload(), deadline=2) if ask else None
     if not sim.running or sim.warehouse is not warehouse or sim.dispatch_mode != mode:
         harness_for(sim).resolve(response, "Отклонено: смена или режим изменились")
         return False
@@ -83,21 +86,22 @@ async def plan_zone(sim, client) -> bool:
         harness_for(sim).resolve(response, "Принято: план проезда передан симуляции")
         reason = "Выбран один из рассчитанных backend маршрутов."
     else:
-        if mode == "model":
-            harness_for(sim).resolve(response, "План разъезда отклонён")
-            return False
-        harness_for(sim).resolve(response, "Отклонено: проезд недоступен; применены правила")
-        if mode in ("model", "demo"):
-            sim.metrics["fallbacks"] += 1
+        fallback = len(proposal.options) > 1 and mode in ("model", "demo")
+        if ask:
             proposal = dispatch.zone_options(sim)
         if not proposal.options:
+            harness_for(sim).resolve(response, "Отклонено: актуальных вариантов разъезда нет")
             return False
         selected = min(proposal.facts, key=lambda key:
                        proposal.facts[key].get("retreat_cells", 0) + proposal.facts[key]["passage_cells"])
         if not dispatch.apply_zone(sim, proposal, selected):
+            harness_for(sim).resolve(response, "Отклонено: серверный план также недоступен")
             return False
+        harness_for(sim).resolve(response, "Отклонено: применён актуальный серверный план")
+        if fallback:
+            sim.metrics["fallbacks"] += 1
         reason = "Выбран кратчайший из рассмотренных вариантов."
-        source = "fallback" if mode in ("model", "demo") else "rules"
+        source = "fallback" if fallback else "rules"
     option = proposal.facts[selected]
     if "yields" in option:
         action = f"{option['yields']} уступает у {option['wait_cell']}, {option['passes']} проезжает."
@@ -107,31 +111,49 @@ async def plan_zone(sim, client) -> bool:
     return True
 
 
-async def compare_shift(client: httpx.AsyncClient | None, mode: str, harness=None) -> dict:
+async def compare_shift(client: httpx.AsyncClient | None, mode: str, harness=None, *, template=None) -> dict:
     sim = WarehouseSimulation()
-    sim.agent_scope = "Сравнительная демосмена"
+    sim.agent_scope = "Сравнительный прогон"
     sim.dispatch_mode = mode
     if harness is not None:
         sim.harness = harness
-    sim.add_order("Дополнительный отбор A-14", (3, 1), (11, 6), "SKU-001", 2, priority=2, due_in_ticks=18)
+    if template is None:
+        sim.add_order("Дополнительный отбор A-14", (3, 1), (11, 6), "SKU-001", 2, priority=2, due_in_ticks=18)
+    else:
+        sim.shift_template = deepcopy(template)
+        sim.custom_layout = sim.shift_template[0]
+        sim.reset()
+    # The isolated run returns metrics directly. No UI snapshot is needed per tick.
+    sim.state = lambda: {}
+    orders = {order.id: {"due_tick": order.due_tick, "delivery_tick": None}
+              for order in sim.warehouse.orders if order.status == "pending"}
     sim.start(assign_orders=False)
     actions = {"offered": "accept", "confirm_pickup": "pickup", "confirm_delivery": "deliver"}
     closure = (5, 3)
-    import time
     started = time.monotonic()
-    for _ in range(80):
+    for _ in range(1600):
         await planning_pass(sim, client, request_limit=6)
-        if sim.tick_count == 2:
+        if template is None and sim.tick_count == 2:
             sim.zone_agent.close_aisle(closure, set(sim.warehouse.obstacles), sim.warehouse.width, sim.warehouse.height)
             sim.coordination = None
             sim.closure_review = True
             sim._event(f"Демосценарий: перекрыта клетка {closure}.", "zone")
-        if sim.tick_count == 12:
+        if template is None and sim.tick_count == 12:
             sim.reopen_aisles()
         for robot in sim.warehouse.robots:
             if robot.order_id and robot.driver_phase in actions:
-                sim.driver_action(robot.id, robot.order_id, actions[robot.driver_phase])
-        sim.tick(assign_orders=False)
-        if sim.tick_count >= 13 and all(order.status == "completed" for order in sim.warehouse.orders):
+                order_id = robot.order_id
+                action = actions[robot.driver_phase]
+                sim.driver_action(robot.id, order_id, action)
+                if action == "deliver" and order_id in orders:
+                    orders[order_id]["delivery_tick"] = sim.tick_count
+        if all(row["delivery_tick"] is not None for row in orders.values()):
             break
-    return {**sim.shift_metrics(), "elapsed_ms": round((time.monotonic()-started)*1000), "source": mode}
+        sim.tick(assign_orders=False)
+        # Yield to the live server even during a run with no model calls.
+        if sim.tick_count % 20 == 0:
+            await asyncio.sleep(0)
+    history = harness_for(sim).history if mode != "rules" else ()
+    accepted = sum(row["outcome"].startswith(("Принято:", "Маршрут проверен")) for row in history)
+    return {**sim.shift_metrics(), "elapsed_ms": round((time.monotonic()-started)*1000), "source": mode,
+            "deliveries": orders, "model_decisions": len(history), "accepted_decisions": accepted}

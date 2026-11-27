@@ -35,7 +35,14 @@ export type DispatchState = {
 }
 
 type Answer = { answer: string | null; facts: string[]; tick: number; source?: string; error?: string }
-type Comparison = { rules: Metrics & {elapsed_ms: number}; model: Metrics & {source: string; elapsed_ms: number} }
+type ComparisonRun = Metrics & {
+  source: string
+  elapsed_ms: number
+  model_decisions: number
+  accepted_decisions: number
+  deliveries: Record<string, { due_tick: number | null; delivery_tick: number | null }>
+}
+type Comparison = { rules: ComparisonRun; model: ComparisonRun; scenario: 'shift_template' | 'demo' }
 
 const metrics: [keyof Metrics, string][] = [
   ['completed', 'Выполнено заказов'], ['ticks', 'Такты смены'], ['distance_m', 'Пройдено, м'],
@@ -131,19 +138,34 @@ export default function DispatchPanel({ api, dispatch, disabled, onMode, targets
       <strong>Данные склада · такт {answer.tick}</strong>
       <ul>{answer.facts.map((fact, index) => <li key={index}>{fact}</li>)}</ul>
     </div>}
-    <h3>Сравнение на демосмене</h3>
-    <p>Четыре заказа, автоматические подтверждения и одно временное перекрытие в обоих прогонах.</p>
+    <h3>Сравнение на одинаковом сценарии</h3>
+    <p>Оба прогона используют отдельные копии начального склада и автоматически подтверждают действия водителя.</p>
     <button className="secondary-button" disabled={disabled || (!dispatch.model_available && dispatch.mode !== 'demo') || Boolean(pending)}
       onClick={() => void run('compare', async () => setComparison(await request<Comparison>('compare')))}>
       {pending === 'compare' ? 'Сравниваем…' : dispatch.mode === 'demo' ? 'Сравнить демонстрацию и алгоритмы' : 'Сравнить модель и алгоритмы'}
     </button>
-    {comparison && <p>Время прогона: алгоритмы {comparison.rules.elapsed_ms} мс, {comparison.model.source === 'demo' ? 'демонстрация' : 'модель'} {comparison.model.elapsed_ms} мс. Преимущество LLM этим сравнением не гарантируется.</p>}
+    {comparison && <p>
+      {comparison.scenario === 'shift_template' ? 'Начальные заказы смены.' : 'Демосценарий с временным перекрытием.'}{' '}
+      {comparison.model.model_decisions != null && <>Принято решений: {comparison.model.accepted_decisions} из {comparison.model.model_decisions}.{' '}</>}
+      Время прогона: правила {comparison.rules.elapsed_ms} мс, {comparison.model.source === 'demo' ? 'демонстрация' : 'модель'} {comparison.model.elapsed_ms} мс.
+    </p>}
     <div className="ai-table-wrap"><table>
       <thead><tr><th>Показатель</th><th>Текущая смена</th>{comparison && <><th>Правила</th><th>{comparison.model.source === 'demo' ? 'Демонстрация' : 'Модель'}</th></>}</tr></thead>
       <tbody>{metrics.map(([key, label]) => <tr key={key}><th scope="row">{label}</th>
         <td>{dispatch.metrics[key]}</td>{comparison && <><td>{comparison.rules[key]}</td><td>{comparison.model[key]}</td></>}
       </tr>)}</tbody>
     </table></div>
+    {comparison?.rules.deliveries && <details>
+      <summary>Сроки доставки по заказам</summary>
+      <div className="ai-table-wrap"><table>
+        <thead><tr><th>Заказ</th><th>Срок, такт</th><th>Правила</th><th>{comparison.model.source === 'demo' ? 'Демонстрация' : 'Модель'}</th></tr></thead>
+        <tbody>{Object.entries(comparison.rules.deliveries).map(([id, row]) => <tr key={id}>
+          <th scope="row">{id}</th><td>{row.due_tick ?? 'Без срока'}</td>
+          <td>{row.delivery_tick ?? 'Не доставлен'}</td>
+          <td>{comparison.model.deliveries[id]?.delivery_tick ?? 'Не доставлен'}</td>
+        </tr>)}</tbody>
+      </table></div>
+    </details>}
     {error && <p className="error-banner" role="alert">{error}</p>}
   </div>
 }

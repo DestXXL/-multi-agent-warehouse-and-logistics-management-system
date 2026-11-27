@@ -4,13 +4,13 @@ import httpx
 
 
 INSTRUCTIONS = {
-    "route": "Ты навигатор погрузчика. Верни в selected упорядоченные ID направленных участков от start до goal. Формат ID: x,y>x,y. Используй connected_sequences как допустимые варианты, выбирай меньшую длину и меньше поворотов. options содержит длины участков. Не добавляй координаты вне списка.",
+    "route": "Ты навигатор погрузчика. Выбери ровно один ID готового маршрута из options. Сопоставь посчитанные сервером длину и число поворотов, учитывай наличие груза.",
     "manager": (
         "Ты менеджер склада. Выбери ровно один ID из plans. Каждый план содержит "
         "готовый совместимый пакет назначений, а options описывает его составляющие. "
         "Учитывай сроки, приоритет, ожидание, число остановок и длину маршрутов."
     ),
-    "zone": "Ты агент зоны. Выбери один допустимый разъезд, учитывая длину пути и наличие груза.",
+    "zone": "Ты агент зоны. Выбери ровно один ID из options, учитывая длину пути и наличие груза. Это задача выбора плана, текстовый вопрос не требуется.",
     "storage": (
         "Выбери один готовый план размещения всего груза. Учитывай расстояние до отгрузки, "
         "текущую загрузку и историю отбора. Расстояние указано в клетках, количество – в коробках. "
@@ -27,6 +27,6 @@ INSTRUCTIONS = {
 }
 
 
-async def consult(client: httpx.AsyncClient, sim, role: str, data: dict) -> tuple[list[str], str] | None:
+async def consult(client: httpx.AsyncClient, sim, role: str, data: dict, *, deadline=None) -> tuple[list[str], str] | None:
     from backend.harness import harness_for
-    return await harness_for(sim).consult(client, sim, role, data)
+    return await harness_for(sim).consult(client, sim, role, data, deadline=deadline)
