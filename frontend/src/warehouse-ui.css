@@ -602,3 +602,217 @@ body {
 .offer-empty { margin: 0; padding: 8px 16px 16px; color: var(--secondary); font-size: 13px; }
 
 .dock-window-tools { scroll-margin-block-start: 110px; }
+/* Make actionable controls slightly larger and easier to distinguish. */
+:root {
+  --control-edge: color-mix(in srgb, var(--accent) 52%, var(--line));
+}
+body button:not(.layout-cell):not(.dialog-resize-grip):not(.managed-resize) {
+  min-height: 40px;
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  line-height: 1.35;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+body :is(.module-launcher button, .driver-task-trigger, .shift-actions button,
+  .fleet-control-actions button, .tablet-task .task-actions button,
+  .layout-editor .editor-actions button) {
+  min-height: 44px;
+  padding: 8px 14px;
+}
+body :is(.module-launcher button, .driver-task-trigger) :is(span, b) { font-size: 14px; }
+body :is(.theme-toggle, .simulation-speed) { height: 40px; padding-inline: 10px; }
+body :is(.panel-window-close, .driver-task-close, .rack-dialog-close,
+  .icon-button, .dock-window-tools button, .scene-camera button,
+  .driver-queue-window > header > button) {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 4px;
+  flex-shrink: 0;
+}
+body button:not(.layout-cell):not(.dialog-resize-grip):not(.managed-resize):hover:not(:disabled) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+body button:not(.dialog-resize-grip):focus-visible,
+body a:focus-visible, body summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+body button:disabled { cursor: default; border-color: var(--line); }
+body :is(.app-navigation a, .driver-link, .layout-header-actions a) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 7px 12px;
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  box-sizing: border-box;
+}
+body summary { cursor: pointer; }
+body :is(.editor-settings, .scale-settings) > summary {
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+body :is(.topbar-right, .tablet-header > div, .dock-window-tools) { flex-wrap: wrap; }
+@media (max-width: 600px) {
+  body .module-launcher button { padding-inline: 8px; }
+  body .driver-task-trigger { padding-inline: 10px; }
+}
+/* Three page switches remain centered in the header, independently of its controls. */
+body .app-shell { padding-left: 0; padding-top: 0; }
+body .topbar { position: relative; min-height: 64px; }
+body .topbar > .app-navigation {
+  position: absolute; inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; flex-direction: row; align-items: center; justify-content: center;
+  width: auto; height: auto; min-height: 0; max-height: none;
+  gap: 8px; padding: 0; margin: 0; border: 0; overflow: visible;
+  background: transparent; box-shadow: none; z-index: 2;
+}
+body .topbar > .app-navigation :is(.nav-brand, .nav-footer) { display: none; }
+body .topbar > .app-navigation :is(button, a) {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 46px; height: 44px; min-height: 44px; padding: 10px; margin: 0;
+  border: 1px solid var(--control-edge); border-radius: 8px;
+  background: var(--surface-raised); color: var(--secondary);
+}
+body .topbar > .app-navigation :is(button, a) span { display: none; }
+body .topbar > .app-navigation :is(button, a) svg { width: 21px; height: 21px; }
+body .topbar > .app-navigation .active {
+  color: var(--ink); border-color: var(--accent);
+  box-shadow: inset 0 -2px var(--accent);
+}
+body .topbar > .app-navigation :is(button, a):hover { background: var(--surface-hover); border-color: var(--accent); }
+@media(max-width:1050px) {
+  body .topbar { padding-bottom: 64px; }
+  body .topbar > .app-navigation { top: auto; bottom: 10px; transform: translateX(-50%); }
+}
+/* Floating tools open centrally; snapping restores a side rail beside the map. */
+body .managed-window{
+  position:fixed;display:flex;flex-direction:column;min-width:0;min-height:0;
+  max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);
+  margin:0;padding:0;border:1px solid var(--control-edge);border-radius:12px;
+  background:var(--surface);color:var(--ink);box-shadow:0 16px 50px #0005;
+  box-sizing:border-box;overflow:hidden;transform:none;translate:none;
+}
+body .managed-window.is-docked{
+  position:relative;inset:auto;width:100%;height:clamp(260px,50vh,560px);
+  max-width:100%;max-height:70vh;box-shadow:none;
+}
+body .workspace-panel-slot .managed-window.is-docked{display:flex!important;padding:0!important;overflow:hidden}
+body .managed-window-header{
+  position:relative;flex:none;display:flex;align-items:center;gap:8px;
+  min-height:54px;padding:8px 10px 8px 14px;background:var(--surface-raised);
+  border-bottom:1px solid var(--line);cursor:grab;user-select:none;touch-action:none;
+}
+body .managed-window-header:active{cursor:grabbing}
+body .managed-window-header>span{color:var(--accent);font-size:20px}
+body .managed-window-header h2{flex:1;min-width:0;margin:0;font-size:16px;line-height:1.4;font-weight:600;overflow-wrap:anywhere}
+body .managed-window-header button{flex:none;width:38px;min-height:38px;padding:4px;background:var(--surface);color:var(--ink);border:1px solid var(--control-edge);font-size:20px}
+body .managed-window-body{flex:1;min-height:0;padding:12px 14px 20px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-color:var(--accent) var(--surface-raised)}
+body .managed-window .managed-window-body>:is(.panel,.offer-window,.rack-docked,.driver-queue-window){
+  position:static!important;inset:auto!important;transform:none!important;translate:none!important;
+  display:block!important;width:100%!important;min-width:0!important;max-width:100%!important;
+  height:auto!important;max-height:none!important;margin:0!important;padding:0!important;
+  border:0!important;box-shadow:none!important;overflow:visible!important;
+}
+body .managed-window-body .driver-queue-scroll{max-height:none;overflow:visible;padding:0}
+body .managed-window-body :is(.order-list,.event-list,.inventory-list,.rack-dialog-body){max-height:none;overflow:visible}
+body .managed-window-body>:is(.panel,.offer-window,.rack-docked,.driver-queue-window)>:is(header,.panel-heading,.inspector-heading,.task-kicker) :is(.panel-window-close,.rack-dialog-close,.icon-button),
+body .managed-window-body>.driver-queue-window>header>button{display:none}
+body .managed-window-body>.driver-queue-window>header{display:none}
+body .managed-window-body>.offer-window>header{display:none}
+body .managed-window-body .tablet-task{display:flex!important;flex-direction:column;gap:12px}
+body .managed-window .managed-resize{
+  position:absolute;z-index:10;margin:0;padding:0;border:0;border-radius:0;
+  min-width:0;min-height:0;background:transparent;color:var(--accent);touch-action:none;
+}
+body .managed-window .managed-resize-x{right:0;top:56px;bottom:18px;width:8px;cursor:ew-resize}
+body .managed-window .managed-resize-y{bottom:0;left:16px;right:20px;height:8px;cursor:ns-resize}
+body .managed-window .managed-resize-xy{right:0;bottom:0;width:22px;height:22px;cursor:nwse-resize;font-size:19px;background:var(--surface)}
+body .managed-window .managed-resize:hover,body .managed-window .managed-resize:focus-visible{background:color-mix(in srgb,var(--accent) 18%,var(--surface))}
+.window-snap-preview{position:fixed;pointer-events:none;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;border:2px dashed var(--accent);border-radius:12px;background:color-mix(in srgb,var(--accent) 20%,var(--surface));opacity:.85;color:var(--ink);font-size:16px;box-sizing:border-box}
+body .dispatch-floor{grid-template-columns:minmax(0,1fr)}
+body .dispatch-floor:has(.managed-window.is-docked){grid-template-columns:minmax(0,1fr) clamp(320px,30vw,480px)}
+body .floor-fleet:not(:has(.managed-window.is-docked)),body .driver-tools:not(:has(.managed-window.is-docked)){display:none}
+.window-home:not(:has(.managed-window.is-docked)){display:contents}
+body .driver-tablet>.tablet-content{grid-template-columns:minmax(0,1fr)}
+body .driver-tablet>.tablet-content:has(.managed-window.is-docked){grid-template-columns:clamp(300px,30vw,480px) minmax(0,1fr)}
+body .tablet-content .tablet-map{min-width:0}
+body .map-panel>.shift-attention{margin-bottom:12px}
+@media(max-width:899px){
+  body .dispatch-floor:has(.managed-window.is-docked),body .driver-tablet>.tablet-content:has(.managed-window.is-docked){grid-template-columns:minmax(0,1fr)}
+}
+.managed-window-host{display:contents}
+body .managed-window .managed-resize{min-height:0!important;min-width:0!important;border:0!important;box-shadow:none!important;line-height:1!important}
+body .managed-window-header:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+/* Independent docking rails reserve space only on their selected side. */
+body .window-layout.window-layout{
+  --dock-width:clamp(240px,25vw,420px);--map-column:1;
+  display:grid;width:100%;min-width:0;align-items:start;
+  grid-template-columns:minmax(0,1fr)!important;
+}
+body .window-layout>.window-dock-rail{display:none;min-width:0;grid-row:1;max-height:calc(100dvh - 180px);overflow:auto;scrollbar-gutter:stable}
+body .window-layout>.window-dock-rail:has(.is-docked){display:flex;flex-direction:column;gap:12px;align-items:stretch}
+body .window-layout>.window-dock-rail[data-side="left"]{grid-column:1}
+body .window-layout>.window-dock-rail[data-side="right"]{grid-column:2}
+body .window-layout:has(>.window-dock-rail[data-side="left"] .is-docked){--map-column:2;grid-template-columns:var(--dock-width) minmax(0,1fr)!important}
+body .window-layout:has(>.window-dock-rail[data-side="right"] .is-docked){grid-template-columns:minmax(0,1fr) var(--dock-width)!important}
+body .window-layout:has(>.window-dock-rail[data-side="left"] .is-docked):has(>.window-dock-rail[data-side="right"] .is-docked){--dock-width:clamp(240px,22vw,380px);grid-template-columns:var(--dock-width) minmax(0,1fr) var(--dock-width)!important}
+body .window-layout:has(>.window-dock-rail[data-side="left"] .is-docked)>.window-dock-rail[data-side="right"]{grid-column:3}
+body .window-layout.window-layout>:is(.scene-container,.tablet-map){grid-column:var(--map-column)!important;grid-row:1!important;order:0!important;width:100%;min-width:0;max-width:100%;box-sizing:border-box}
+body .window-layout>:is(.floor-fleet,.driver-tools){display:none!important}
+body .managed-window-host.is-dock-host{display:block;flex:none;min-width:0;width:100%}
+body :is(.scene-container,.tablet-scene){min-width:0;max-width:100%}
+body .scene-viewport{max-width:100%;box-sizing:border-box}
+body .scene-container .warehouse-scene{width:100%;max-width:100%}
+body .managed-window.is-docked{
+  position:relative!important;inset:auto!important;transform:none!important;translate:none!important;
+  width:100%!important;min-width:0!important;max-width:100%!important;
+  height:min(520px,65vh);margin:0!important;z-index:auto;box-sizing:border-box;
+}
+body .managed-window.is-docked .managed-window-body{min-width:0;overflow:auto}
+@media(max-width:899px){
+  body .window-layout.window-layout{--map-column:1;grid-template-columns:minmax(0,1fr)!important}
+  body .window-layout.window-layout>.window-dock-rail[data-side="left"]{grid-column:1;grid-row:2}
+  body .window-layout.window-layout>.window-dock-rail[data-side="right"]{grid-column:1;grid-row:3}
+}
+
+/* A translucent accent wash marks tools whose windows are open. */
+body .module-launcher button[aria-expanded="true"],
+body .driver-task-trigger[aria-expanded="true"] {
+  background:linear-gradient(color-mix(in srgb,var(--accent) 20%,transparent),color-mix(in srgb,var(--accent) 20%,transparent)),var(--surface);
+  border-color:var(--accent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 25%,transparent);
+  color:var(--ink);
+}
+body .module-launcher button[aria-expanded="true"]:hover,
+body .driver-task-trigger[aria-expanded="true"]:hover {
+  background:linear-gradient(color-mix(in srgb,var(--accent) 28%,transparent),color-mix(in srgb,var(--accent) 28%,transparent)),var(--surface);
+}
+
+/* Scale settings stay in normal flow in floating and docked tool windows. */
+body .managed-window .managed-window-body .scale-settings {
+  position:static;inset:auto;width:100%;min-width:0;max-width:100%;
+  margin:12px 0 0;z-index:auto;
+}
+body .managed-window .managed-window-body .scale-settings summary {
+  white-space:normal;overflow-wrap:anywhere;
+}
+body .managed-window .managed-window-body .scale-settings[open] .map-dimension-controls {
+  position:static;inset:auto;width:100%;min-width:0;max-width:100%;
+  margin:8px 0 0;box-shadow:none;box-sizing:border-box;
+  display:flex;flex-wrap:wrap;gap:12px;
+}
+body .managed-window .map-dimension-controls>label {
+  min-width:0;max-width:100%;flex-wrap:wrap;
+}
+body .managed-window .map-dimension-controls>label>span {flex-wrap:wrap}
+body .managed-window .map-dimension-controls>small {min-width:0;overflow-wrap:anywhere}
