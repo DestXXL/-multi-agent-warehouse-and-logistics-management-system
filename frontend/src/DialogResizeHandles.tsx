@@ -6,7 +6,7 @@ export default function DialogResizeHandles() {
   const [dialogs, setDialogs] = useState<HTMLElement[]>([])
   useEffect(() => {
     const sync = () => {
-      const next = [...document.querySelectorAll<HTMLElement>('[role="dialog"]:not([data-managed-window])')]
+      const next = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')]
       setDialogs(previous => previous.length === next.length && previous.every((node, i) => node === next[i]) ? previous : next)
     }
     const observer = new MutationObserver(sync)

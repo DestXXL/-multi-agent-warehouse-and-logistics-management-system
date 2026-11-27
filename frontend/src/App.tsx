@@ -2,7 +2,6 @@ import { LineIcon } from './LineIcon'
 import { metricPoint, NODE_SPACING_M } from './units'
 import { serverUrl as API } from './server'
 import DriverQueue from './DriverQueue'
-import FloatingWindow, { DockRails } from './FloatingWindow'
 import InventoryBook, { type Movement } from './InventoryBook'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import WarehouseScene from './WarehouseScene'
@@ -89,12 +88,12 @@ const defaultPanelOrder = Object.keys(panelNames) as DashboardPanel[]
 
 function readOpenPanels(): DashboardPanel[] {
   try {
-    const saved: unknown = JSON.parse(localStorage.getItem('warehouse-open-panels-v2') ?? 'null')
+    const saved: unknown = JSON.parse(localStorage.getItem('warehouse-open-panels') ?? 'null')
     if (Array.isArray(saved)) {
       return saved.filter((key): key is DashboardPanel => key !== 'object' && defaultPanelOrder.includes(key))
     }
   } catch { /* Use the default when storage is unavailable. */ }
-  return []
+  return ['offers', 'fleet', 'activity']
 }
 
 function readPanelOrder() {
@@ -182,7 +181,9 @@ function App() {
   const [detailRackId, setDetailRackId] = useState<string | null>(null)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const panelRail = useRef<HTMLDivElement>(null)
-  const [panelOrder] = useState(readPanelOrder)
+  const draggedPanel = useRef<DashboardPanel | null>(null)
+  const [dropTarget, setDropTarget] = useState<DashboardPanel | null>(null)
+  const [panelOrder, setPanelOrder] = useState(readPanelOrder)
   const [openPanels, setOpenPanels] = useState(readOpenPanels)
   const [revealPanel, setRevealPanel] = useState<DashboardPanel | null>(null)
   const [eventSource, setEventSource] = useState('all')
@@ -201,7 +202,7 @@ function App() {
   }, [panelOrder])
   useEffect(() => {
     try {
-      localStorage.setItem('warehouse-open-panels-v2', JSON.stringify(openPanels.filter(key => key !== 'object')))
+      localStorage.setItem('warehouse-open-panels', JSON.stringify(openPanels.filter(key => key !== 'object')))
     } catch { /* Browser storage is optional. */ }
   }, [openPanels])
   useEffect(() => {
@@ -386,6 +387,14 @@ function App() {
     if (openPanels.includes(panel)) closePanel(panel)
     else openPanel(panel)
   }
+  function movePanel(from: DashboardPanel, to: DashboardPanel) {
+    if (from === to) return
+    setPanelOrder(current => {
+      const next = current.filter(key => key !== from)
+      next.splice(current.indexOf(to), 0, from)
+      return next
+    })
+  }
   const offers = robots.filter(r => r.driver_phase === 'offered' && !r.stopped_by_operator)
   const focusVehicle = highlightedRobotId ?? robots.find(r => r.order_id && r.driver_phase !== 'offered')?.id ?? robots[0]?.id
   const gateName = (point: [number, number]) => {
@@ -480,7 +489,7 @@ function App() {
         {error && <div className="workflow-error" role="alert">{error}</div>}
         {connection === 'offline' && <div className="workflow-error" role="status">Связь потеряна. Показано последнее известное состояние; команды недоступны.</div>}
         {screen === 'driver' ? (
-          driverRobot ? <DriverTablet onCloseRack={() => setDetailRackId(null)} rackDetails={rackDetails} orders={orders} robot={driverRobot} robots={robots} order={driverOrder} cells={<WarehouseScene running={state.running} simulationSpeed={state.speed ?? 1} warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={driverRobot.id} target={driverOrder ? (['offered', 'to_pickup', 'confirm_pickup'].includes(driverRobot.driver_phase) ? driverOrder.pickup : driverOrder.dropoff) : driverRobot.driver_phase === 'returning' ? driverRobot.home : null} onRack={id => setDetailRackId(id)} onRobot={setDriverId} />} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
+          driverRobot ? <DriverTablet rackDetails={rackDetails} orders={orders} robot={driverRobot} robots={robots} order={driverOrder} cells={<WarehouseScene running={state.running} simulationSpeed={state.speed ?? 1} warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={driverRobot.id} target={driverOrder ? (['offered', 'to_pickup', 'confirm_pickup'].includes(driverRobot.driver_phase) ? driverOrder.pickup : driverOrder.dropoff) : driverRobot.driver_phase === 'returning' ? driverRobot.home : null} onRack={id => setDetailRackId(id)} onRobot={setDriverId} />} physicalScale={physicalScale} running={state.running} busy={busy || connection !== 'online'} online={connection === 'online'} events={state.events} onSelect={setDriverId} onCommand={command} /> : <p>Нет доступного погрузчика.</p>
         ) : <>
         <section className="main-column">
           <div className="page-heading">
@@ -517,17 +526,45 @@ function App() {
               <h2>Карта склада</h2>
               <div className="map-actions"><span className="map-live">{connection === 'online' ? (state.running ? 'Выполняется' : 'На паузе') : 'Нет связи'}</span></div>
             </div>
-            <ShiftAttention robots={robots} closures={warehouse!.closed_cells} online={connection === 'online'}
-              running={state.running} onVehicle={selectRobot} onClosures={() => { setDetailRackId(null); openPanel('control') }} />
-            <div className="dispatch-floor window-layout"><DockRails />
+            <div className="dispatch-floor">
               <WarehouseScene running={state.running} simulationSpeed={state.speed ?? 1} warehouse={warehouse!} scale={physicalScale} selectedRack={selectedRackId} selectedRobot={focusVehicle} onRack={selectRack} onRobot={selectRobot} />
               <div className="floor-fleet">
-
+            <ShiftAttention robots={robots} closures={warehouse!.closed_cells} online={connection === 'online'}
+              running={state.running} onVehicle={selectRobot} onClosures={() => { setDetailRackId(null); openPanel('control') }} />
 
                 <div className="workspace-panel-slot" ref={panelRail}>
-                  {visiblePanels.map(panel => <FloatingWindow key={panel} id={`dispatch-${panel}`} title={panelNames[panel]} onClose={() => closePanel(panel)}>
+                  {visiblePanels.map((panel, index) => <section key={panel} data-window={panel}
+                    className={`dock-window ${dropTarget === panel ? 'dock-drop-target' : ''}`}
+                    aria-label={panelNames[panel]}
+                    onDragOver={event => {
+                      if (!draggedPanel.current || draggedPanel.current === panel) return
+                      event.preventDefault()
+                      event.dataTransfer.dropEffect = 'move'
+                      setDropTarget(panel)
+                    }}
+                    onDrop={event => {
+                      if (!draggedPanel.current) return
+                      event.preventDefault()
+                      movePanel(draggedPanel.current, panel)
+                      draggedPanel.current = null
+                      setDropTarget(null)
+                    }}>
+                    <div className="dock-window-tools" role="group" aria-label={`Порядок панели «${panelNames[panel]}»`}>
+                      <span draggable className="dock-grip" title="Перетащить панель"
+                        onDragStart={event => {
+                          draggedPanel.current = panel
+                          event.dataTransfer.setData('text/plain', panel)
+                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.setDragImage(event.currentTarget.closest('.dock-window')!, 20, 12)
+                        }}
+                        onDragEnd={() => { draggedPanel.current = null; setDropTarget(null) }}>⠿</span>
+                      <button type="button" aria-label={`Выше · ${panelNames[panel]}`} title="Выше" disabled={index === 0}
+                        onClick={() => movePanel(panel, visiblePanels[index - 1])}>↑</button>
+                      <button type="button" aria-label={`Ниже · ${panelNames[panel]}`} title="Ниже" disabled={index === visiblePanels.length - 1}
+                        onClick={() => movePanel(panel, visiblePanels[index + 1])}>↓</button>
+                    </div>
                     {panelContent[panel]}
-                  </FloatingWindow>)}
+                  </section>)}
                 </div>
               </div>
             </div>
@@ -611,12 +648,11 @@ function ShiftAttention({ robots, closures, online, onVehicle, onClosures }: {
   </section>
 }
 
-function DriverTablet({ onCloseRack, rackDetails, orders, robot, robots, order, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
-  onCloseRack: () => void; rackDetails: React.ReactNode; orders: Order[]; robot: Robot; robots: Robot[]; order?: Order; cells: React.ReactNode; physicalScale: PhysicalScale;
+function DriverTablet({ rackDetails, orders, robot, robots, order, cells, physicalScale, running, busy, online, events, onSelect, onCommand }: {
+  rackDetails: React.ReactNode; orders: Order[]; robot: Robot; robots: Robot[]; order?: Order; cells: React.ReactNode; physicalScale: PhysicalScale;
   running: boolean; busy: boolean; online: boolean; events: EventItem[];
   onSelect: (id: string) => void; onCommand: (path: string, body?: unknown) => Promise<void>;
 }) {
-  const [taskOpen, setTaskOpen] = useState(false)
   const [fleetOpen, setFleetOpen] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
   const [acceptingAll, setAcceptingAll] = useState(false)
@@ -655,14 +691,14 @@ function DriverTablet({ onCloseRack, rackDetails, orders, robot, robots, order, 
   }
   return <>
     <section className="driver-tablet">
-    <header className="tablet-header"><div><div className="tablet-brand"><span className="brand-mark">W</span><strong>Планшет водителя</strong></div><label className="vehicle-select">Погрузчик <select value={robot.id} onChange={(event) => { onSelect(event.target.value) }}>{robots.map((vehicle) => <option key={vehicle.id}>{vehicle.id}</option>)}</select></label><button className="driver-task-trigger" type="button" aria-expanded={taskOpen} onClick={() => setTaskOpen(value => !value)}>Текущее задание</button><button className="driver-task-trigger" type="button" aria-expanded={fleetOpen} onClick={() => { setFleetOpen(value => !value) }}><span>Все погрузчики</span><b>{robots.length}</b></button><button className="driver-task-trigger driver-accept-all" type="button" disabled={busy || acceptingAll || !online || !offeredRobots.length} title="Принять все назначенные задания. Забор и доставка выполняются автоматически." onClick={() => void acceptAllOrders()}><span>{acceptingAll ? 'Принимаем задания…' : 'Принять все задания'}</span><b>{offeredRobots.length}</b></button><button className="driver-task-trigger" type="button" aria-expanded={queueOpen} onClick={() => { setQueueOpen(value => !value) }}><span>Очередь заказов</span><b>{orders.filter(order => !['completed', 'cancelled'].includes(order.status)).length}</b></button></div><div className="tablet-live">{online ? '● Подключён' : '○ Нет связи'}</div></header>
+    <header className="tablet-header"><div><div className="tablet-brand"><span className="brand-mark">W</span><strong>Планшет водителя</strong></div><label className="vehicle-select">Погрузчик <select value={robot.id} onChange={(event) => { onSelect(event.target.value) }}>{robots.map((vehicle) => <option key={vehicle.id}>{vehicle.id}</option>)}</select></label><button className="driver-task-trigger" type="button" aria-expanded={fleetOpen} onClick={() => { setQueueOpen(false); setFleetOpen(value => !value) }}><span>Все погрузчики</span><b>{robots.length}</b></button><button className="driver-task-trigger driver-accept-all" type="button" disabled={busy || acceptingAll || !online || !offeredRobots.length} title="Принять все назначенные задания. Забор и доставка выполняются автоматически." onClick={() => void acceptAllOrders()}><span>{acceptingAll ? 'Принимаем задания…' : 'Принять все задания'}</span><b>{offeredRobots.length}</b></button><button className="driver-task-trigger" type="button" aria-expanded={queueOpen} onClick={() => { setFleetOpen(false); setQueueOpen(value => !value) }}><span>Очередь заказов</span><b>{orders.filter(order => !['completed', 'cancelled'].includes(order.status)).length}</b></button></div><div className="tablet-live">{online ? '● Подключён' : '○ Нет связи'}</div></header>
     {!running && <div className="workflow-notice driver-pause-notice">Движение на паузе. Диспетчер может запустить или продолжить симуляцию. Подтверждения доступны.</div>}
-    <div className="tablet-content window-layout"><DockRails />
+    <div className="tablet-content">
       <div className="driver-tools">
-    {fleetOpen && <FloatingWindow id="driver-fleet" title="Все погрузчики" side="left" onClose={() => setFleetOpen(false)}><DriverQueue controls orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setFleetOpen(false)} busy={busy || !online || acceptingAll} onCommand={onCommand} /></FloatingWindow>}
-    {queueOpen && <FloatingWindow id="driver-queue" title="Очередь заказов" side="left" onClose={() => setQueueOpen(false)}><DriverQueue orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setQueueOpen(false)} /></FloatingWindow>}
+    {fleetOpen && <DriverQueue controls orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setFleetOpen(false)} busy={busy || !online || acceptingAll} onCommand={onCommand} />}
+    {queueOpen && <DriverQueue orders={orders} robots={robots} selected={robot.id} onSelect={onSelect} onClose={() => setQueueOpen(false)} />}
 
-      {taskOpen && <FloatingWindow id="driver-task" title={`Текущее задание · ${robot.id}`} side="left" onClose={() => setTaskOpen(false)}><section className="tablet-task panel" aria-labelledby="driver-task-title"><div className="task-kicker"><span id="driver-task-title">Задание · {robot.id}</span><span className={`robot-status-pill ${robot.status}`}>{phaseNames[robot.driver_phase]}</span></div>
+      <section className="tablet-task panel" aria-labelledby="driver-task-title"><div className="task-kicker"><span id="driver-task-title">Задание · {robot.id}</span><span className={`robot-status-pill ${robot.status}`}>{phaseNames[robot.driver_phase]}</span></div>
         <h1>{order?.id ?? 'Ожидание задания'}</h1>
         <p className="driver-instruction">{robot.stopped_by_operator ? 'Движение остановлено. Продолжите работу, когда будете готовы.' : instructions[robot.driver_phase]}</p>
         {order && <><div className="task-product"><span className="stock-box">▧</span><div><small>Товар · {order.product_id} · {order.quantity} шт.</small><strong>{order.item}</strong><small>Размер коробки · {order.length_mm != null && order.width_mm != null && order.height_mm != null ? formatDimensions(order.length_mm, order.width_mm, order.height_mm) : 'не указан'}</small><small>Адрес отбора · {order.storage_location_id || 'назначается'}</small>{currentAllocation?.placement_snapshot.length ? <small>Координаты коробок · {currentAllocation.placement_snapshot.map(position => formatCoordinates(position.x_mm, position.y_mm)).join(' · ')}</small> : null}</div></div>
@@ -674,14 +710,13 @@ function DriverTablet({ onCloseRack, rackDetails, orders, robot, robots, order, 
           <button className="tablet-alert" disabled={busy || !robot.can_report_obstacle} onClick={() => onCommand(`/api/robots/${robot.id}/obstacle`)}>Проход передо мной перекрыт</button>
         </div>
         <p className="tablet-hint">После принятия заказа отбор, доставка и возврат на стоянку выполняются автоматически.</p>
-      </section></FloatingWindow>}
-      {rackDetails && <FloatingWindow id="driver-rack" title="Карточка стеллажа" side="left" onClose={onCloseRack}>{rackDetails}</FloatingWindow>}
+      </section>
       </div>
       <section className="tablet-map panel"><div className="tablet-map-title"><div><h2>{destination ? `Цель: ${metricPoint(destination)}` : 'Карта склада'}</h2><small className="tablet-dimensions">Габарит {physicalScale.forkliftLengthM.toFixed(1)} × {physicalScale.forkliftWidthM.toFixed(1)} м (демо)</small></div><span className="map-live">{online ? '● На связи' : '○ Нет связи'}</span></div>
       {robot.status === 'waiting' && ['to_pickup', 'to_dropoff', 'returning'].includes(robot.driver_phase) && <div className="workflow-notice">Свободного пути нет. Ожидайте открытия прохода диспетчером.</div>}
       {robot.route_version > 0 && <div className="route-update">Маршрут пересмотрен · версия {robot.route_version}</div>}
       <div className="map-legend"><span><i className="legend-dot robot-dot" /> Выбранный погрузчик</span><span><i className="legend-box route-dot" /> Ваш маршрут</span><span><i className="legend-box closed-dot" /> Перекрытый проход</span></div>
-      <div className="tablet-scene">{cells}</div><div className="tablet-position"><span><small>ВАША ПОЗИЦИЯ</small><strong>{metricPoint(robot.position_m ?? robot.position, !!robot.position_m)}</strong></span><span><small>ДО ЦЕЛИ</small><strong>{(robot.route.length ? (robot.route_remaining_m ?? robot.route.length * NODE_SPACING_M).toLocaleString('ru') + ' м' : '') || (destination && key(destination) !== key(robot.position) ? '–' : '0 м')}</strong></span><span><small>ГРУЗ</small><strong>{robot.carrying_item ? 'На борту' : 'Пусто'}</strong></span></div>
+      <div className="tablet-scene">{cells}</div>{rackDetails}<div className="tablet-position"><span><small>ВАША ПОЗИЦИЯ</small><strong>{metricPoint(robot.position_m ?? robot.position, !!robot.position_m)}</strong></span><span><small>ДО ЦЕЛИ</small><strong>{(robot.route.length ? (robot.route_remaining_m ?? robot.route.length * NODE_SPACING_M).toLocaleString('ru') + ' м' : '') || (destination && key(destination) !== key(robot.position) ? '–' : '0 м')}</strong></span><span><small>ГРУЗ</small><strong>{robot.carrying_item ? 'На борту' : 'Пусто'}</strong></span></div>
       <div className="driver-events" aria-live="polite">{events.filter((event) => event.robot_id === robot.id).slice(0, 3).map((event) => <p key={event.id}>{event.message}</p>)}</div>
       </section>
     </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Order, Robot } from './App'
 
 export default function DriverQueue({ orders, robots, selected, onSelect, onClose, controls = false, busy = false, onCommand }: {
@@ -12,6 +12,11 @@ export default function DriverQueue({ orders, robots, selected, onSelect, onClos
     try { await onCommand(path, body) } finally { setPendingAction(false) }
   }
   const pending = orders.filter(o => o.status === 'pending' && !o.robot_id).sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id))
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', escape)
+    return () => window.removeEventListener('keydown', escape)
+  }, [onClose])
   const row = (order: Order) => <div className="driver-queue-order" key={order.id}>
     <strong>{order.id}<span>{order.quantity} шт.</span></strong>
     <p>{order.item}</p>
