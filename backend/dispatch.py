@@ -202,7 +202,7 @@ def zone_options(sim) -> Proposal:
                 if not retreat or len(retreat) > 5:
                     continue
                 passage = sim._plan_route(passing.position, target, fixed | {side})
-                if not passage or len(passage) > 16:
+                if not passage:
                     continue
                 if sim._plan_route(side, yield_goal, fixed | {target}) is None:
                     continue

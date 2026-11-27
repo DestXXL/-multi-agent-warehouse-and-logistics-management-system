@@ -57,12 +57,12 @@ export default function AIControl({ api, ai, disabled, mode, agents }: {
         <div><strong>{ai.last_latency_ms === null ? 'Нет данных' : `${ai.last_latency_ms} мс`}</strong><span>последний ответ</span></div>
       </div>
       {ai.unknown_usage > 0 && <p>В {ai.unknown_usage} ответах провайдер не сообщил расход. Лимит запросов продолжает действовать.</p>}
-      {ai.budget_exhausted && <p role="status">Лимит исчерпан. Назначения продолжатся по правилам. В режиме ИИ погрузчики будут ждать новых маршрутов до восстановления доступа. Можно увеличить лимит в настройках.</p>}
+      {ai.budget_exhausted && <p role="status">Лимит исчерпан. Назначения продолжатся по правилам. Маршруты рассчитает сервер. Можно увеличить лимит в настройках.</p>}
       {ai.last_error && <p role="status">{ai.last_error}{ai.cooldown_seconds > 0 ? ` · пауза ${ai.cooldown_seconds} с` : ''}</p>}
     </section>
     <details>
       <summary>Подключение и настройки</summary>
-      <p>Ключ и адрес API задаются на сервере. Инструкция: docs/LLM.md. Проверка подключения отправит один запрос и может расходовать токены.</p>
+      <p>Вставьте ключ KodikRouter в LLM_API_KEY в файле .env проекта и запустите смену. Проверка подключения отправляет один запрос провайдеру.</p>
       <form className="dispatch-form" onSubmit={save} key={JSON.stringify(ai.settings)}>
         <label>Модель<select name="model" defaultValue={ai.settings.model}>{ai.models.map(model => <option key={model}>{model}</option>)}</select></label>
         <details><summary>Параметры и лимиты</summary><div className="ai-fields">

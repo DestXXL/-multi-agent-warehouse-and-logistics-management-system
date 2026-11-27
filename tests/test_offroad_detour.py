@@ -16,21 +16,14 @@ class DetourTests(unittest.TestCase):
         sim.roads = lambda: edges
         return sim
 
-    def test_prefers_road_and_bypasses_vehicle_without_crossing_obstacles(self):
+    def test_blocked_lane_waits_for_traffic_or_uses_marked_bypass(self):
         sim = self.make_sim()
+        self.assertIsNone(sim._plan_route((0, 0), (4, 0), {(2, 0)}, heading=0))
         self.assertEqual(sim._plan_route((0, 0), (4, 0), set()), [(1, 0), (2, 0), (3, 0), (4, 0)])
-        path = sim._plan_route((0, 0), (4, 0), {(2, 0)}, heading=0)
-        self.assertTrue(path)
-        self.assertNotIn((2, 0), path)
-        self.assertNotIn((1, 1), path)
-        self.assertTrue(any(y > 0 for x, y in path))
-        robot = sim.warehouse.robots[0]
-        for point in path:
-            for _ in range(8):
-                sim._advance(robot, [point], {(2, 0)})
-                if robot.position == point:
-                    break
-            self.assertEqual(robot.position, point)
+        bypass = [(0, 0), (0, 1), (0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (4, 1), (4, 0)]
+        edges = sim.roads() | set(zip(bypass, bypass[1:]))
+        sim.roads = lambda: edges
+        self.assertEqual(sim._plan_route((0, 0), (4, 0), {(2, 0)}, heading=0), bypass[1:])
 
     def test_does_not_bypass_closed_or_occupied_destination(self):
         sim = self.make_sim()

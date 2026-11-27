@@ -33,10 +33,9 @@ export default function TrafficMarkings({ lanes, unit }: { lanes: Lane[]; unit: 
       const length = end - start
       const arrows = Math.max(1, Math.ceil(length / 5))
       return <g key={[horizontal, across, start].join('/')} transform={horizontal ? `translate(${start} ${across})` : `translate(${across} ${start}) rotate(90)`}>
-        <path d={`M0 0H${length}`} stroke="var(--muted)" strokeOpacity=".12" strokeWidth="1"/>
-        {Array.from({length: arrows}, (_,i) => <path key={i} transform={`translate(${(i+.5)*length/arrows} 0) scale(${sign} 1)`} d="M-.22 -.035 H.035 V-.13 L.24 0 .035 .13 V.035 H-.22 Z" fill="var(--muted)" />)}
+        {Array.from({length: arrows}, (_,i) => <path key={i} transform={`translate(${(i+.5)*length/arrows} 0) scale(${sign * .78} .78)`} d="M-.22 -.035 H.035 V-.13 L.24 0 .035 .13 V.035 H-.22 Z" fill="var(--muted)" />)}
       </g>
     })}
-    {joinStrips(dividers).map(({horizontal, across, start, end}) => <path key={[horizontal, across, start].join('/')} d={horizontal ? `M${start} ${across}H${end}` : `M${across} ${start}V${end}`} stroke="var(--accent)" strokeWidth=".055"/>)}
+    {joinStrips(dividers).map(({horizontal, across, start, end}) => <path key={[horizontal, across, start].join('/')} d={horizontal ? `M${start} ${across}H${end}` : `M${across} ${start}V${end}`} stroke="var(--accent)" strokeWidth=".022"/>)}
   </g>
 }

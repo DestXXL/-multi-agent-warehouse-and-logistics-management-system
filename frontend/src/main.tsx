@@ -9,10 +9,9 @@ import './rack-details.css'
 import './control-center.css'
 import './responsive.css'
 import './rack-modal.css'
-import './design-showcase.css'
-import './comfortable-palette.css'
+import './warehouse-ui.css'
 
-document.documentElement.dataset.design = 'artdeco'
+document.documentElement.dataset.theme = localStorage.getItem('warehouse-theme') === 'light' ? 'light' : 'dark'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><DialogResizeHandles />

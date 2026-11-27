@@ -9,3 +9,6 @@ frontend/dist/
 *.tsbuildinfo
 .env.*
 !.env.example
+
+# Auto-generated context docs
+.repo-context/

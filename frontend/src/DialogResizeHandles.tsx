@@ -21,7 +21,7 @@ function Grips({ dialog }: { dialog: HTMLElement }) {
   const drag = useRef<{ x: number; y: number; width: number; height: number; axis: string } | null>(null)
   const storageKey = `warehouse-dialog-size-v1:${dialog.getAttribute('aria-labelledby') || dialog.getAttribute('aria-label') || dialog.className}`
   function applySize(width: number, height: number) {
-    const maxWidth = Math.max(160, window.innerWidth - 24)
+    const maxWidth = Math.max(160, document.documentElement.clientWidth - 32)
     const maxHeight = Math.max(120, window.innerHeight - 24)
     dialog.style.setProperty('width', `${Math.max(Math.min(300, maxWidth), Math.min(maxWidth, width))}px`, 'important')
     dialog.style.setProperty('height', `${Math.max(Math.min(180, maxHeight), Math.min(maxHeight, height))}px`, 'important')
@@ -38,6 +38,8 @@ function Grips({ dialog }: { dialog: HTMLElement }) {
       if (saved && typeof saved.width === 'number' && Number.isFinite(saved.width) && saved.width > 0 && typeof saved.height === 'number' && Number.isFinite(saved.height) && saved.height > 0) {
         width = saved.width
         height = saved.height
+      } else if (dialog.classList.contains('offer-window')) {
+        return
       }
     } catch { /* Use the compact defaults if storage is unavailable or invalid. */ }
     applySize(width, height)
@@ -64,7 +66,7 @@ function Grips({ dialog }: { dialog: HTMLElement }) {
     if (!['ArrowRight','ArrowLeft','ArrowUp','ArrowDown'].includes(event.key)) return
     event.preventDefault()
     const box = dialog.getBoundingClientRect()
-    if (axis.includes('x') && ['ArrowLeft','ArrowRight'].includes(event.key)) dialog.style.setProperty('width', `${Math.max(280, Math.min(window.innerWidth - 24, box.width + (event.key === 'ArrowRight' ? 24 : -24)))}px`, 'important')
+    if (axis.includes('x') && ['ArrowLeft','ArrowRight'].includes(event.key)) dialog.style.setProperty('width', `${Math.max(280, Math.min(document.documentElement.clientWidth - 32, box.width + (event.key === 'ArrowRight' ? 24 : -24)))}px`, 'important')
     if (axis.includes('y') && ['ArrowUp','ArrowDown'].includes(event.key)) dialog.style.setProperty('height', `${Math.max(180, Math.min(window.innerHeight - 24, box.height + (event.key === 'ArrowDown' ? 24 : -24)))}px`, 'important')
     saveSize()
   }}>{axis === 'xy' ? '◢' : ''}</button>)}</>

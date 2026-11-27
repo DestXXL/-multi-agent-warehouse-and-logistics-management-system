@@ -1,76 +1,31 @@
-import type { Lane } from './TrafficMarkings'
-
 type Point = [number, number]
 type Floor = {
   width: number; height: number; obstacles: Point[]; closed_cells: Point[]
-  lanes?: Lane[]; racks: { position: Point; service_point: Point | null }[]
-  robots: { home: Point }[]
+  racks: { position: Point }[]; roads?: { edges: [Point, Point][]; stops: Point[] }
 }
 
-// Trace two-way access from the traffic lanes to the working faces of the racks.
-export function serviceAisles(floor: Floor) {
-  const { width, height } = floor
-  const id = ([x, y]: Point) => y * width + x
-  const point = (i: number): Point => [i % width, Math.floor(i / width)]
-  const valid = ([x, y]: Point) => x >= 0 && y >= 0 && x < width && y < height
-  const blocked = new Set([...floor.obstacles, ...floor.closed_cells, ...floor.racks.map(r => r.position)].map(id))
-  const lanes = new Map(floor.lanes?.map(l => [id([l.x, l.y]), l.direction]))
-  const roots = lanes.size ? [...lanes.keys()] : floor.robots.map(r => id(r.home))
-  const queue = [...new Set(roots)].filter(i => !blocked.has(i))
-  const parent = new Map(queue.map(i => [i, i]))
-  const distance = new Map(queue.map(i => [i, 0]))
-  for (let i = 0; i < queue.length; i++) {
-    const from = queue[i], [x, y] = point(from)
-    const lane = lanes.get(from)
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      // Only a lateral junction allows both entry and exit at the same point.
-      if (lane && ((lane === 'east' || lane === 'west') ? dx !== 0 : dy !== 0)) continue
-      const next: Point = [x + dx, y + dy], key = id(next)
-      if (!valid(next) || blocked.has(key) || parent.has(key)) continue
-      parent.set(key, from)
-      distance.set(key, distance.get(from)! + 1)
-      queue.push(key)
+// Mark the perimeter of each storage island, leaving adjacent rack bays joined.
+export function floorMarkings(floor: Floor) {
+  const racks = new Set(floor.racks.map(r => r.position.join(',')))
+  const unavailable = new Set([...floor.obstacles, ...floor.closed_cells].map(p => p.join(',')))
+  const stops = new Map<string, Point>()
+  const designated = floor.roads && new Set(floor.roads.stops.map(p => p.join(',')))
+  const perimeter: string[] = [], fill: string[] = []
+  for (const {position: [x, y]} of floor.racks) {
+    fill.push(`M${x} ${y}h1v1h-1z`)
+    if (!racks.has([x-1,y].join(','))) perimeter.push(`M${x} ${y}v1`)
+    if (!racks.has([x+1,y].join(','))) perimeter.push(`M${x+1} ${y}v1`)
+    for (const dy of [-1, 1]) {
+      const ny = y + dy, key = [x, ny].join(',')
+      if (racks.has(key)) continue
+      perimeter.push(`M${x} ${dy < 0 ? y : y+1}h1`)
+      if (ny >= 0 && ny < floor.height && !unavailable.has(key) && (!designated || designated.has(key))) {
+        stops.set(key, [x, ny])
+      }
     }
   }
-
-  const edges = new Set<string>()
-  const path: string[] = []
-  const join = (a: number, b: number) => {
-    const key = Math.min(a,b) + ':' + Math.max(a,b)
-    if (edges.has(key)) return
-    edges.add(key)
-    const [x,y] = point(a), [u,v] = point(b)
-    path.push(`M${x+.5} ${y+.5}L${u+.5} ${v+.5}`)
+  return {
+    storage: fill.join(' '), perimeter: perimeter.join(' '), stops: [...stops.values()],
+    road: floor.roads?.edges.map(([[x,y],[u,v]]) => `M${x+.5} ${y+.5}L${u+.5} ${v+.5}`).join(' ') ?? '',
   }
-  const stops = new Set<number>()
-  for (const rack of floor.racks) {
-    const [x, y] = rack.position
-    const faces: Point[] = [[x,y-1], [x,y+1]]
-    const options = faces.filter(p => valid(p) && parent.has(id(p)))
-    options.sort((a,b) => distance.get(id(a))! - distance.get(id(b))!)
-    if (options.length) stops.add(id(options[0]))
-  }
-  // Consecutive pickup points along a shelf row share one continuous aisle.
-  for (const stop of stops) {
-    if (stop % width !== width-1 && stops.has(stop+1) && !lanes.has(stop) && !lanes.has(stop+1)) join(stop,stop+1)
-  }
-  // Connect each continuous row once, at its nearest junction.
-  const visited = new Set<number>()
-  for (const stop of stops) {
-    if (visited.has(stop)) continue
-    let entry = stop, current = stop
-    while (current % width && edges.has((current-1)+':'+current)) current--
-    while (true) {
-      visited.add(current)
-      if (distance.get(current)! < distance.get(entry)!) entry = current
-      if (!edges.has(current+':'+(current+1))) break
-      current++
-    }
-    while (parent.get(entry) !== entry) {
-      const previous = parent.get(entry)!
-      join(entry, previous)
-      entry = previous
-    }
-  }
-  return { path: path.join(' '), stops: [...stops].map(point) }
 }
